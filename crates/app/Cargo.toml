@@ -1,0 +1,10 @@
+[package]
+name = "dnd-assistant"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+dnd-assistant-core = { path = "../core" }
+serde_json.workspace = true
+

@@ -1,0 +1,10 @@
+# Copy to config.toml and adjust paths for local use.
+
+# This existing campaign repository is GM-facing. Keep the default scope
+# private until an explicit public allowlist is implemented and reviewed.
+campaign_path = "/home/toby/src/family-dnd"
+default_knowledge_scope = "gm_private"
+
+# Future explicit allowlist, relative to campaign_path:
+# public_paths = ["campaign/player-safe/", "characters/PCS.md"]
+
