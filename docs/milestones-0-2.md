@@ -19,8 +19,8 @@
 
 - [x] Add `cpal` microphone capture owned by the Rust application.
 - [x] Add Rust-native model download/cache/checksum handling.
-- [ ] Integrate an embedded inference backend; benchmark `sherpa-onnx` first
-  and retain whisper.cpp as a replaceable comparison backend.
+- [x] Integrate the embedded Whisper backend; retain whisper.cpp as a
+  replaceable comparison backend.
 - [x] Add an embedded Whisper backend boundary using `whisper-rs`.
 - [x] Wire native capture windows through resampling into embedded Whisper and
   the agent fan-out command.
@@ -28,7 +28,7 @@
   backend comparison, not as a runtime prerequisite.
 - [ ] Define a versioned STT adapter message: provisional/final segment,
   timestamps, text, confidence, source sequence.
-- [ ] Feed microphone chunks to whisper.cpp without blocking the event loop.
+- [x] Feed microphone chunks to the embedded Whisper backend.
 - [ ] Reconcile revisions by stable source sequence, not text matching.
 - [ ] Persist raw STT messages and expose a rolling transcript endpoint.
 - [ ] Show latency, model, capture device, and failure state in the UI.
