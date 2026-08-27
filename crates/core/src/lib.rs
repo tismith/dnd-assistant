@@ -3,6 +3,11 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+pub mod agents;
+pub use agents::{
+    AgentConfig, AgentKind, AgentOutput, TranscriptContext, run_builtin_agent, run_enabled_agents,
+};
+
 pub type SegmentId = String;
 pub type SpeakerId = String;
 
@@ -39,7 +44,7 @@ pub struct SpeakerSegment {
     pub speaker_id: SpeakerId,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionState {
     pub current_location: Option<String>,
     pub active_npcs: Vec<String>,

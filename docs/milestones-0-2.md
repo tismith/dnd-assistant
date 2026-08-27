@@ -46,3 +46,5 @@
 - [ ] Replay recordings to measure regression without requiring a live table.
 - [ ] Add campaign retrieval fixtures from `family-dnd` without modifying that
   repository; verify private scope is retained through context construction.
+- [x] Define a shared transcript context and configurable agent fan-out.
+- [x] Add deterministic recorder, live-summary, and GM next-step fixtures.

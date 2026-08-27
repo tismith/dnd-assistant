@@ -17,7 +17,25 @@ cargo test
 cargo run -p dnd-assistant -- validate
 cargo run -p dnd-assistant -- reconcile-demo
 cargo run -p dnd-assistant -- record data/spike.wav
+cargo run -p dnd-assistant -- replay agents.example.json fixtures/transcript.jsonl data/replay
 ```
+
+The replay command proves the agent fan-out without audio or network access.
+Each enabled agent receives the current segment and a rolling 20-segment
+window, plus the configured campaign Markdown contents. The built-in agents
+write a JSONL recorder, a running Markdown summary, and GM next-step options.
+Replace the built-in handlers with model-backed handlers later while retaining
+the same context contract.
+
+To use the family campaign context, change `campaign_context` in a private copy
+of `agents.example.json` to:
+
+```json
+["/home/toby/src/family-dnd/campaign/CAMPAIGN_CONTEXT.md", "/home/toby/src/family-dnd/campaign/CANON.md", "/home/toby/src/family-dnd/plot/OPEN_THREADS.md"]
+```
+
+That repository is GM-facing; do not use these files for a player-facing agent
+until a reviewed public allowlist exists.
 
 For the next live transcription check, build whisper.cpp with its `whisper-stream`
 example and run:

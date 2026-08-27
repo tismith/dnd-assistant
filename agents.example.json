@@ -1,0 +1,8 @@
+{
+  "campaign_context": ["campaign/campaign.md"],
+  "agents": [
+    { "id": "recorder", "kind": "recorder", "enabled": true, "output": "transcript.jsonl" },
+    { "id": "summary", "kind": "live_summary", "enabled": true, "output": "summary.md" },
+    { "id": "gm-next-steps", "kind": "next_steps", "enabled": true, "output": "gm-next-steps.md" }
+  ]
+}

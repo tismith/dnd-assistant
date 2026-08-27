@@ -1,13 +1,27 @@
 use dnd_assistant_core::{
-    ReconciliationInput, SegmentStatus, SpeakerSegment, TranscriptSegment, attribute_speaker,
+    AgentConfig, AgentKind, ReconciliationInput, SegmentStatus, SessionState, SpeakerSegment,
+    TranscriptContext, TranscriptSegment, attribute_speaker, run_enabled_agents,
 };
-use std::{env, fs, path::PathBuf, process::Command};
+use std::{
+    env, fs,
+    io::Write,
+    path::{Path, PathBuf},
+    process::Command,
+};
+
+#[derive(Debug, serde::Deserialize)]
+struct AppConfig {
+    agents: Vec<AgentConfig>,
+    #[serde(default)]
+    campaign_context: Vec<String>,
+}
 
 fn main() {
     let mut args = env::args().skip(1);
     match args.next().as_deref() {
         Some("validate") => validate(),
         Some("reconcile-demo") => reconcile_demo(),
+        Some("replay") => replay(args.next(), args.next(), args.next()),
         Some("record") => record(
             args.next()
                 .map(PathBuf::from)
@@ -82,5 +96,101 @@ fn reconcile_demo() {
 }
 
 fn usage() {
-    println!("Usage: cargo run -p dnd-assistant -- <validate|record [path]|reconcile-demo>");
+    println!(
+        "Usage: cargo run -p dnd-assistant -- <validate|record [path]|reconcile-demo|replay <config.json> <transcript.jsonl> <output-dir>>"
+    );
+}
+
+fn replay(
+    config_path: Option<String>,
+    transcript_path: Option<String>,
+    output_dir: Option<String>,
+) {
+    let (Some(config_path), Some(transcript_path), Some(output_dir)) =
+        (config_path, transcript_path, output_dir)
+    else {
+        usage();
+        std::process::exit(2);
+    };
+    let config: AppConfig = read_json(&config_path);
+    let campaign_context = config
+        .campaign_context
+        .iter()
+        .map(|path| {
+            fs::read_to_string(path)
+                .unwrap_or_else(|error| panic!("cannot read campaign context {path}: {error}"))
+        })
+        .collect::<Vec<_>>();
+    let segments: Vec<TranscriptSegment> = fs::read_to_string(&transcript_path)
+        .unwrap_or_else(|error| panic!("cannot read {transcript_path}: {error}"))
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            serde_json::from_str(line)
+                .unwrap_or_else(|error| panic!("invalid transcript line: {error}"))
+        })
+        .collect();
+    fs::create_dir_all(&output_dir)
+        .unwrap_or_else(|error| panic!("cannot create {output_dir}: {error}"));
+    let mut recent = Vec::new();
+    for segment in segments {
+        recent.push(segment.clone());
+        let recent_window = recent
+            .iter()
+            .rev()
+            .take(20)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        let context = TranscriptContext {
+            session_id: "replay-session".into(),
+            current: recent.last().cloned().expect("current segment exists"),
+            recent: recent_window,
+            session_state: Some(SessionState::default()),
+            campaign_context: campaign_context.clone(),
+        };
+        for (agent, result) in config
+            .agents
+            .iter()
+            .filter(|agent| agent.enabled)
+            .zip(run_enabled_agents(&config.agents, &context))
+        {
+            write_agent_output(Path::new(&output_dir), agent, &result);
+            println!("{} -> {}", result.agent_id, agent.output);
+        }
+    }
+}
+
+fn read_json<T: serde::de::DeserializeOwned>(path: &str) -> T {
+    let contents =
+        fs::read_to_string(path).unwrap_or_else(|error| panic!("cannot read {path}: {error}"));
+    serde_json::from_str(&contents)
+        .unwrap_or_else(|error| panic!("invalid JSON in {path}: {error}"))
+}
+
+fn write_agent_output(
+    output_dir: &Path,
+    config: &AgentConfig,
+    result: &dnd_assistant_core::AgentOutput,
+) {
+    let path = output_dir.join(&config.output);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).expect("agent output directory creates");
+    }
+    match &config.kind {
+        AgentKind::Recorder => {
+            let mut file = fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .expect("recorder output opens");
+            writeln!(file, "{}", result.body).expect("recorder output writes");
+        }
+        AgentKind::LiveSummary | AgentKind::NextSteps => {
+            fs::write(path, format!("{}\n\n{}", result.title, result.body))
+                .expect("agent output writes");
+        }
+    }
 }

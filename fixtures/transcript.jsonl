@@ -1,0 +1,3 @@
+{"id":"segment-001","start_ms":0,"end_ms":3200,"speaker_id":"speaker_1","text":"We enter the Hanging Gardens and look for Rootwhisper.","confidence":0.95,"status":"finalized"}
+{"id":"segment-002","start_ms":3500,"end_ms":6100,"speaker_id":"speaker_2","text":"I search the altar for traps.","confidence":0.94,"status":"finalized"}
+{"id":"segment-003","start_ms":6400,"end_ms":8900,"speaker_id":"speaker_1","text":"Can we talk to the guardian before we touch the Gem?","confidence":0.91,"status":"finalized"}
