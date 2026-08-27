@@ -5,6 +5,7 @@ use dnd_assistant_core::{
 };
 use dnd_assistant_models::{default_model_cache_dir, ensure_model};
 use dnd_assistant_stt::WhisperTranscriber;
+mod ui;
 use std::{
     env, fs,
     io::{BufRead, Write},
@@ -119,6 +120,13 @@ fn live(model_path: Option<String>, config_path: Option<String>, output_dir: Opt
         eprintln!("audio unavailable: {error}");
         std::process::exit(1);
     });
+    let ui_state = ui::new_state();
+    let ui_address =
+        env::var("DND_ASSISTANT_UI_ADDRESS").unwrap_or_else(|_| ui::DEFAULT_UI_ADDRESS.into());
+    if let Err(error) = ui::start(ui_state.clone(), ui_address) {
+        eprintln!("live UI unavailable; continuing without it: {error}");
+    }
+    ui::set_status(&ui_state, "running");
     fs::create_dir_all(&output_dir)
         .unwrap_or_else(|error| panic!("cannot create {}: {error}", output_dir.display()));
     let channels = capture.format.channels as usize;
@@ -148,6 +156,7 @@ fn live(model_path: Option<String>, config_path: Option<String>, output_dir: Opt
                             &mut recent,
                             &output_dir,
                             segment,
+                            Some(&ui_state),
                         );
                     }
                 }
@@ -259,6 +268,7 @@ fn replay(
             &mut recent,
             Path::new(&output_dir),
             segment,
+            None,
         );
     }
 }
@@ -290,6 +300,7 @@ fn stream(config_path: Option<String>, output_dir: Option<String>) {
             &mut recent,
             &output_dir,
             segment,
+            None,
         );
     }
 }
@@ -311,8 +322,12 @@ fn process_segment(
     recent: &mut Vec<TranscriptSegment>,
     output_dir: &Path,
     segment: TranscriptSegment,
+    ui_state: Option<&ui::SharedLiveState>,
 ) {
     recent.push(segment);
+    if let Some(ui_state) = ui_state {
+        ui::update_segment(ui_state, recent.last().expect("current segment exists"));
+    }
     let recent_window = recent
         .iter()
         .rev()
@@ -339,7 +354,12 @@ fn process_segment(
         .zip(run_enabled_agents(&config.agents, &context))
     {
         match write_agent_output(output_dir, agent, &result) {
-            Ok(()) => println!("{} -> {}", result.agent_id, agent.output),
+            Ok(()) => {
+                if let Some(ui_state) = ui_state {
+                    ui::update_agent(ui_state, &result);
+                }
+                println!("{} -> {}", result.agent_id, agent.output)
+            }
             Err(error) => eprintln!(
                 "agent {} failed; continuing other agents: {error}",
                 agent.id

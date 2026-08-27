@@ -17,11 +17,11 @@ cargo test
 cargo run -p dnd-assistant -- validate
 cargo run -p dnd-assistant -- audio-info
 cargo run -p dnd-assistant -- capture
-cargo run -p dnd-assistant -- live /path/to/ggml-base.en.bin agents.example.json ~/.local/share/dnd-assistant/sessions/live
+cargo run -p dnd-assistant -- live /path/to/ggml-base.en.bin agents.example.json
 cargo run -p dnd-assistant -- reconcile-demo
 cargo run -p dnd-assistant -- record
-cargo run -p dnd-assistant -- replay agents.example.json fixtures/transcript.jsonl ~/.local/share/dnd-assistant/sessions/replay
-cat fixtures/transcript.jsonl | cargo run -p dnd-assistant -- stream agents.example.json ~/.local/share/dnd-assistant/sessions/live
+cargo run -p dnd-assistant -- replay agents.example.json fixtures/transcript.jsonl "${XDG_DATA_HOME:-$HOME/.local/share}/dnd-assistant/sessions/replay"
+cat fixtures/transcript.jsonl | cargo run -p dnd-assistant -- stream agents.example.json
 ```
 
 `replay` proves the agent fan-out deterministically. `stream` consumes the
@@ -45,7 +45,10 @@ Each enabled agent receives the current segment and a rolling 20-segment
 window, plus the configured campaign Markdown contents. The built-in agents
 write a JSONL recorder, a running Markdown summary, and GM next-step options.
 Replace the built-in handlers with model-backed handlers later while retaining
-the same context contract.
+the same context contract. It also starts a localhost UI at
+`http://127.0.0.1:8787/`; set `DND_ASSISTANT_UI_ADDRESS` to change the bind
+address. The UI shows the rolling transcript and latest output from each
+enabled agent. If the UI cannot bind, capture and agent processing continue.
 
 To use the family campaign context, change `campaign_context` in a private copy
 of `agents.example.json` to:

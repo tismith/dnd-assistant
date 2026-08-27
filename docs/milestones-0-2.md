@@ -11,6 +11,7 @@
 - [ ] Add JSONL append-only event writer with crash-safe line writes.
 - [ ] Add service health model and structured logs.
 - [ ] Add a tiny local HTTP page that displays fixture transcript events.
+- [x] Add a localhost live-session page with rolling transcript and agent panels.
 - [ ] Add a read-only campaign loader configured for `/home/toby/src/family-dnd`;
   default all imported documents to `gm_private` until an allowlist exists.
 - [x] Add an in-process microphone capture boundary with `cpal`.
@@ -31,7 +32,7 @@
 - [x] Feed microphone chunks to the embedded Whisper backend.
 - [ ] Reconcile revisions by stable source sequence, not text matching.
 - [ ] Persist raw STT messages and expose a rolling transcript endpoint.
-- [ ] Show latency, model, capture device, and failure state in the UI.
+- [x] Show live status, transcript, and agent output in the UI.
 - [ ] Verify a clean-machine runtime needs only the packaged executable and
   first-run model downloads.
 - [ ] Run a 30-minute stability test and record CPU/RAM/latency/accuracy.
