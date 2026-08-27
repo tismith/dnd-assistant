@@ -7,8 +7,10 @@ timestamp-overlap reconciler.
 ## Current status
 
 Milestone 0 is in progress. The Rust workspace builds and tests the domain
-boundary. `record` captures 16 kHz mono PCM WAV audio through ALSA. Whisper.cpp
-is intentionally an external process and is not bundled.
+boundary. The current `record` command is a transitional diagnostic that
+captures 16 kHz mono PCM WAV audio through ALSA. The target runtime is a single
+Rust executable with in-process capture/inference and first-run model
+downloads; whisper.cpp is not intended to remain a user-installed prerequisite.
 
 ```sh
 cargo test

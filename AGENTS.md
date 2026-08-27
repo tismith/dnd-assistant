@@ -14,6 +14,10 @@ the architecture to solve later features before those risks are measured.
   should be rebuildable where practical.
 - Keep STT, diarization, and LLM providers behind replaceable process or trait
   boundaries. Do not add ML FFI to Rust merely for language consistency.
+- The runtime distribution target is one executable plus downloaded model
+  files. Helper programs such as `arecord`, `ffmpeg`, Python, and a separate
+  whisper process may be used for development spikes but must not become user
+  prerequisites without an explicit decision.
 - Provisional transcript and speaker attribution are valid live states.
 - Never let an agent failure stop capture or transcript persistence.
 - Keep commits narrow and coherent. Build, test, and document each increment.
@@ -53,4 +57,3 @@ git diff --check
 External tools are optional prerequisites for the first spike. Use
 `cargo run -p dnd-assistant -- validate` to report whether ALSA `arecord` and
 the upstream whisper.cpp `whisper-stream` binary are available.
-
