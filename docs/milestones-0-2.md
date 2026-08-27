@@ -13,13 +13,17 @@
 - [ ] Add a tiny local HTTP page that displays fixture transcript events.
 - [ ] Add a read-only campaign loader configured for `/home/toby/src/family-dnd`;
   default all imported documents to `gm_private` until an allowlist exists.
+- [x] Add an in-process microphone capture boundary with `cpal`.
 
 ## Milestone 1 — live transcription
 
-- [ ] Add `cpal` microphone capture owned by the Rust application.
-- [ ] Add model-manager download/cache/checksum handling.
+- [x] Add `cpal` microphone capture owned by the Rust application.
+- [x] Add Rust-native model download/cache/checksum handling.
 - [ ] Integrate an embedded inference backend; benchmark `sherpa-onnx` first
   and retain whisper.cpp as a replaceable comparison backend.
+- [x] Add an embedded Whisper backend boundary using `whisper-rs`.
+- [x] Wire native capture windows through resampling into embedded Whisper and
+  the agent fan-out command.
 - [ ] Install and benchmark whisper.cpp models on the intended machine as a
   backend comparison, not as a runtime prerequisite.
 - [ ] Define a versioned STT adapter message: provisional/final segment,

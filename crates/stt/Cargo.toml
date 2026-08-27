@@ -1,0 +1,11 @@
+[package]
+name = "dnd-assistant-stt"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+dnd-assistant-core = { path = "../core" }
+thiserror.workspace = true
+whisper-rs.workspace = true
+

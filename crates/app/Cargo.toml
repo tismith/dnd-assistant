@@ -6,5 +6,8 @@ license.workspace = true
 
 [dependencies]
 dnd-assistant-core = { path = "../core" }
+dnd-assistant-audio = { path = "../audio" }
+dnd-assistant-stt = { path = "../stt" }
+dnd-assistant-models = { path = "../models" }
 serde.workspace = true
 serde_json.workspace = true

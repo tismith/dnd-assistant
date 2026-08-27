@@ -1,10 +1,13 @@
+use dnd_assistant_audio::{default_input_description, downmix_and_resample, start_default_input};
 use dnd_assistant_core::{
     AgentConfig, AgentKind, ReconciliationInput, SegmentStatus, SessionState, SpeakerSegment,
     TranscriptContext, TranscriptSegment, attribute_speaker, run_enabled_agents,
 };
+use dnd_assistant_models::{default_model_cache_dir, ensure_model};
+use dnd_assistant_stt::WhisperTranscriber;
 use std::{
     env, fs,
-    io::Write,
+    io::{BufRead, Write},
     path::{Path, PathBuf},
     process::Command,
 };
@@ -20,12 +23,16 @@ fn main() {
     let mut args = env::args().skip(1);
     match args.next().as_deref() {
         Some("validate") => validate(),
+        Some("audio-info") => audio_info(),
+        Some("capture") => capture(),
+        Some("live") => live(args.next(), args.next(), args.next()),
         Some("reconcile-demo") => reconcile_demo(),
         Some("replay") => replay(args.next(), args.next(), args.next()),
+        Some("stream") => stream(args.next(), args.next()),
         Some("record") => record(
             args.next()
                 .map(PathBuf::from)
-                .unwrap_or_else(|| "data/spike.wav".into()),
+                .unwrap_or_else(|| default_data_dir().join("spike.wav")),
         ),
         _ => usage(),
     }
@@ -39,6 +46,116 @@ fn validate() {
             .is_ok_and(|s| s.success());
         println!("{command}: {}", if found { "available" } else { "missing" });
     }
+}
+
+fn audio_info() {
+    match default_input_description() {
+        Ok((name, format)) => println!(
+            "input: {name} ({} Hz, {} channels)",
+            format.sample_rate, format.channels
+        ),
+        Err(error) => {
+            eprintln!("audio unavailable: {error}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn capture() {
+    let capture = start_default_input(8).unwrap_or_else(|error| {
+        eprintln!("audio unavailable: {error}");
+        std::process::exit(1);
+    });
+    println!(
+        "capturing {} Hz, {} channels; press Ctrl-C to stop",
+        capture.format.sample_rate, capture.format.channels
+    );
+    let mut chunks = 0_u64;
+    let mut samples = 0_u64;
+    for chunk in capture.chunks {
+        chunks += 1;
+        samples += chunk.samples.len() as u64;
+        if chunks % 20 == 0 {
+            println!("captured {chunks} chunks / {samples} samples");
+        }
+    }
+}
+
+fn live(model_path: Option<String>, config_path: Option<String>, output_dir: Option<String>) {
+    let (Some(model_path), Some(config_path), Some(output_dir)) =
+        (model_path, config_path, output_dir)
+    else {
+        usage();
+        std::process::exit(2);
+    };
+    let config: AppConfig = read_json(&config_path);
+    let campaign_context = load_campaign_context(&config);
+    let capture = start_default_input(8).unwrap_or_else(|error| {
+        eprintln!("audio unavailable: {error}");
+        std::process::exit(1);
+    });
+    let model_path = if model_path.starts_with("http://") || model_path.starts_with("https://") {
+        let filename = model_path
+            .rsplit('/')
+            .next()
+            .filter(|name| !name.is_empty())
+            .unwrap_or("model.bin");
+        let destination = default_model_cache_dir().join(filename);
+        ensure_model(&model_path, &destination, None).unwrap_or_else(|error| {
+            eprintln!("model download unavailable: {error}");
+            std::process::exit(1);
+        })
+    } else {
+        PathBuf::from(&model_path)
+    };
+    let mut transcriber = WhisperTranscriber::load(&model_path).unwrap_or_else(|error| {
+        eprintln!("transcription unavailable: {error}");
+        std::process::exit(1);
+    });
+    fs::create_dir_all(&output_dir)
+        .unwrap_or_else(|error| panic!("cannot create {output_dir}: {error}"));
+    let channels = capture.format.channels as usize;
+    let sample_rate = capture.format.sample_rate;
+    let window_input_samples = sample_rate as usize * channels * 5;
+    let mut input_samples = Vec::with_capacity(window_input_samples);
+    let mut recent = Vec::new();
+    let mut window_start_ms = 0_u64;
+    println!(
+        "live transcription started at {} Hz / {} channels; press Ctrl-C to stop",
+        sample_rate, channels
+    );
+    for chunk in capture.chunks {
+        input_samples.extend(chunk.samples);
+        while input_samples.len() >= window_input_samples {
+            let window: Vec<f32> = input_samples.drain(..window_input_samples).collect();
+            let audio = downmix_and_resample(&window, channels, sample_rate, 16_000);
+            let segments = transcriber
+                .transcribe_window(&audio)
+                .unwrap_or_else(|error| panic!("transcription failed: {error}"));
+            for mut segment in segments {
+                segment.start_ms += window_start_ms;
+                segment.end_ms += window_start_ms;
+                segment.status = SegmentStatus::Finalized;
+                process_segment(
+                    &config,
+                    &campaign_context,
+                    &mut recent,
+                    Path::new(&output_dir),
+                    segment,
+                );
+            }
+            window_start_ms += 5_000;
+        }
+    }
+}
+
+fn default_data_dir() -> PathBuf {
+    let base = env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")))
+        .unwrap_or_else(|| PathBuf::from(".local/share"));
+    base.join("dnd-assistant").join("sessions")
 }
 
 fn record(path: PathBuf) {
@@ -97,7 +214,7 @@ fn reconcile_demo() {
 
 fn usage() {
     println!(
-        "Usage: cargo run -p dnd-assistant -- <validate|record [path]|reconcile-demo|replay <config.json> <transcript.jsonl> <output-dir>>"
+        "Usage: cargo run -p dnd-assistant -- <validate|audio-info|capture|live <model> <config.json> <output-dir>|record [path]|reconcile-demo|replay <config.json> <transcript.jsonl> <output-dir>|stream <config.json> <output-dir>>"
     );
 }
 
@@ -134,32 +251,87 @@ fn replay(
         .unwrap_or_else(|error| panic!("cannot create {output_dir}: {error}"));
     let mut recent = Vec::new();
     for segment in segments {
-        recent.push(segment.clone());
-        let recent_window = recent
-            .iter()
-            .rev()
-            .take(20)
-            .cloned()
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect();
-        let context = TranscriptContext {
-            session_id: "replay-session".into(),
-            current: recent.last().cloned().expect("current segment exists"),
-            recent: recent_window,
-            session_state: Some(SessionState::default()),
-            campaign_context: campaign_context.clone(),
-        };
-        for (agent, result) in config
-            .agents
-            .iter()
-            .filter(|agent| agent.enabled)
-            .zip(run_enabled_agents(&config.agents, &context))
-        {
-            write_agent_output(Path::new(&output_dir), agent, &result);
-            println!("{} -> {}", result.agent_id, agent.output);
+        process_segment(
+            &config,
+            &campaign_context,
+            &mut recent,
+            Path::new(&output_dir),
+            segment,
+        );
+    }
+}
+
+fn stream(config_path: Option<String>, output_dir: Option<String>) {
+    let (Some(config_path), Some(output_dir)) = (config_path, output_dir) else {
+        usage();
+        std::process::exit(2);
+    };
+    let config: AppConfig = read_json(&config_path);
+    let campaign_context = load_campaign_context(&config);
+    fs::create_dir_all(&output_dir)
+        .unwrap_or_else(|error| panic!("cannot create {output_dir}: {error}"));
+    let stdin = std::io::stdin();
+    let mut recent = Vec::new();
+    for line in stdin.lock().lines() {
+        let line = line.expect("read transcript stream line");
+        if line.trim().is_empty() {
+            continue;
         }
+        let segment: TranscriptSegment = serde_json::from_str(&line)
+            .unwrap_or_else(|error| panic!("invalid transcript stream line: {error}"));
+        process_segment(
+            &config,
+            &campaign_context,
+            &mut recent,
+            Path::new(&output_dir),
+            segment,
+        );
+    }
+}
+
+fn load_campaign_context(config: &AppConfig) -> Vec<String> {
+    config
+        .campaign_context
+        .iter()
+        .map(|path| {
+            fs::read_to_string(path)
+                .unwrap_or_else(|error| panic!("cannot read campaign context {path}: {error}"))
+        })
+        .collect()
+}
+
+fn process_segment(
+    config: &AppConfig,
+    campaign_context: &[String],
+    recent: &mut Vec<TranscriptSegment>,
+    output_dir: &Path,
+    segment: TranscriptSegment,
+) {
+    recent.push(segment);
+    let recent_window = recent
+        .iter()
+        .rev()
+        .take(20)
+        .cloned()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    let context = TranscriptContext {
+        session_id: "live-session".into(),
+        current: recent.last().cloned().expect("current segment exists"),
+        recent: recent_window,
+        session_state: Some(SessionState::default()),
+        campaign_context: campaign_context.to_vec(),
+    };
+    for (agent, result) in config
+        .agents
+        .iter()
+        .filter(|agent| agent.enabled)
+        .zip(run_enabled_agents(&config.agents, &context))
+    {
+        write_agent_output(output_dir, agent, &result);
+        println!("{} -> {}", result.agent_id, agent.output);
     }
 }
 

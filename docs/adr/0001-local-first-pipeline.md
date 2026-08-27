@@ -59,6 +59,9 @@ The application cannot eliminate the operating system's audio stack or device
 drivers. It can eliminate user-installed command-line helpers and language
 runtimes. Optional model downloads must be explicit, resumable, checksum
 verified, stored in an application cache, and usable offline after download.
+Use XDG Base Directory locations on Linux: models in
+`$XDG_CACHE_HOME/dnd-assistant/models` and durable recordings/session data in
+`$XDG_DATA_HOME/dnd-assistant/sessions`, with standard home-directory fallbacks.
 
 ## Campaign context integration
 

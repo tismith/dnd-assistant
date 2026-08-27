@@ -15,12 +15,32 @@ downloads; whisper.cpp is not intended to remain a user-installed prerequisite.
 ```sh
 cargo test
 cargo run -p dnd-assistant -- validate
+cargo run -p dnd-assistant -- audio-info
+cargo run -p dnd-assistant -- capture
+cargo run -p dnd-assistant -- live /path/to/ggml-base.en.bin agents.example.json ~/.local/share/dnd-assistant/sessions/live
 cargo run -p dnd-assistant -- reconcile-demo
-cargo run -p dnd-assistant -- record data/spike.wav
-cargo run -p dnd-assistant -- replay agents.example.json fixtures/transcript.jsonl data/replay
+cargo run -p dnd-assistant -- record
+cargo run -p dnd-assistant -- replay agents.example.json fixtures/transcript.jsonl ~/.local/share/dnd-assistant/sessions/replay
+cat fixtures/transcript.jsonl | cargo run -p dnd-assistant -- stream agents.example.json ~/.local/share/dnd-assistant/sessions/live
 ```
 
-The replay command proves the agent fan-out without audio or network access.
+`replay` proves the agent fan-out deterministically. `stream` consumes the
+same JSONL contract one line at a time, which is the live boundary for the
+future embedded transcription engine.
+
+`audio-info` and `capture` use the in-process `cpal` capture crate. They are
+the first step toward removing the transitional `arecord` dependency from the
+runtime; `capture` currently reports normalized raw chunks and does not yet
+transcribe them.
+
+`live` is the in-process transcription path. It captures five-second windows,
+downmixes/resamples them to 16 kHz mono, runs the embedded Whisper backend,
+and sends finalized segments through the configured agents. Its first argument
+may be an existing model path or an HTTP(S) model URL; URL models are cached in
+the XDG cache directory (`$XDG_CACHE_HOME/dnd-assistant/models`, or
+`~/.cache/dnd-assistant/models`) by the Rust-native model manager. Recordings
+default to `$XDG_DATA_HOME/dnd-assistant/sessions`, or
+`~/.local/share/dnd-assistant/sessions`.
 Each enabled agent receives the current segment and a rolling 20-segment
 window, plus the configured campaign Markdown contents. The built-in agents
 write a JSONL recorder, a running Markdown summary, and GM next-step options.

@@ -1,0 +1,10 @@
+[package]
+name = "dnd-assistant-audio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cpal.workspace = true
+thiserror.workspace = true
+

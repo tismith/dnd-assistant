@@ -20,6 +20,9 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Install native build dependencies
+        run: sudo apt-get update && sudo apt-get install --yes clang cmake libasound2-dev libclang-dev pkg-config
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -37,4 +40,3 @@ jobs:
 
       - name: Check live transcription script
         run: bash -n scripts/live-transcription.sh
-
