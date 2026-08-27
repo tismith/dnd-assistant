@@ -8,15 +8,19 @@ use dnd_assistant_stt::WhisperTranscriber;
 use std::{
     env, fs,
     io::{BufRead, Write},
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     process::Command,
 };
 
 #[derive(Debug, serde::Deserialize)]
 struct AppConfig {
+    #[serde(default)]
+    session_id: Option<String>,
     agents: Vec<AgentConfig>,
     #[serde(default)]
     campaign_context: Vec<String>,
+    #[serde(default)]
+    model_sha256: Option<String>,
 }
 
 fn main() {
@@ -82,18 +86,15 @@ fn capture() {
 }
 
 fn live(model_path: Option<String>, config_path: Option<String>, output_dir: Option<String>) {
-    let (Some(model_path), Some(config_path), Some(output_dir)) =
-        (model_path, config_path, output_dir)
-    else {
+    let (Some(model_path), Some(config_path)) = (model_path, config_path) else {
         usage();
         std::process::exit(2);
     };
     let config: AppConfig = read_json(&config_path);
     let campaign_context = load_campaign_context(&config);
-    let capture = start_default_input(8).unwrap_or_else(|error| {
-        eprintln!("audio unavailable: {error}");
-        std::process::exit(1);
-    });
+    let output_dir = output_dir
+        .map(PathBuf::from)
+        .unwrap_or_else(default_data_dir);
     let model_path = if model_path.starts_with("http://") || model_path.starts_with("https://") {
         let filename = model_path
             .rsplit('/')
@@ -101,10 +102,12 @@ fn live(model_path: Option<String>, config_path: Option<String>, output_dir: Opt
             .filter(|name| !name.is_empty())
             .unwrap_or("model.bin");
         let destination = default_model_cache_dir().join(filename);
-        ensure_model(&model_path, &destination, None).unwrap_or_else(|error| {
-            eprintln!("model download unavailable: {error}");
-            std::process::exit(1);
-        })
+        ensure_model(&model_path, &destination, config.model_sha256.as_deref()).unwrap_or_else(
+            |error| {
+                eprintln!("model download unavailable: {error}");
+                std::process::exit(1);
+            },
+        )
     } else {
         PathBuf::from(&model_path)
     };
@@ -112,8 +115,12 @@ fn live(model_path: Option<String>, config_path: Option<String>, output_dir: Opt
         eprintln!("transcription unavailable: {error}");
         std::process::exit(1);
     });
+    let capture = start_default_input(8).unwrap_or_else(|error| {
+        eprintln!("audio unavailable: {error}");
+        std::process::exit(1);
+    });
     fs::create_dir_all(&output_dir)
-        .unwrap_or_else(|error| panic!("cannot create {output_dir}: {error}"));
+        .unwrap_or_else(|error| panic!("cannot create {}: {error}", output_dir.display()));
     let channels = capture.format.channels as usize;
     let sample_rate = capture.format.sample_rate;
     let window_input_samples = sample_rate as usize * channels * 5;
@@ -129,20 +136,22 @@ fn live(model_path: Option<String>, config_path: Option<String>, output_dir: Opt
         while input_samples.len() >= window_input_samples {
             let window: Vec<f32> = input_samples.drain(..window_input_samples).collect();
             let audio = downmix_and_resample(&window, channels, sample_rate, 16_000);
-            let segments = transcriber
-                .transcribe_window(&audio)
-                .unwrap_or_else(|error| panic!("transcription failed: {error}"));
-            for mut segment in segments {
-                segment.start_ms += window_start_ms;
-                segment.end_ms += window_start_ms;
-                segment.status = SegmentStatus::Finalized;
-                process_segment(
-                    &config,
-                    &campaign_context,
-                    &mut recent,
-                    Path::new(&output_dir),
-                    segment,
-                );
+            match transcriber.transcribe_window(&audio) {
+                Ok(segments) => {
+                    for mut segment in segments {
+                        segment.start_ms += window_start_ms;
+                        segment.end_ms += window_start_ms;
+                        segment.status = SegmentStatus::Finalized;
+                        process_segment(
+                            &config,
+                            &campaign_context,
+                            &mut recent,
+                            &output_dir,
+                            segment,
+                        );
+                    }
+                }
+                Err(error) => eprintln!("transcription window failed; continuing capture: {error}"),
             }
             window_start_ms += 5_000;
         }
@@ -214,7 +223,7 @@ fn reconcile_demo() {
 
 fn usage() {
     println!(
-        "Usage: cargo run -p dnd-assistant -- <validate|audio-info|capture|live <model> <config.json> <output-dir>|record [path]|reconcile-demo|replay <config.json> <transcript.jsonl> <output-dir>|stream <config.json> <output-dir>>"
+        "Usage: cargo run -p dnd-assistant -- <validate|audio-info|capture|live <model> <config.json> [output-dir]|record [path]|reconcile-demo|replay <config.json> <transcript.jsonl> <output-dir>|stream <config.json> [output-dir]>"
     );
 }
 
@@ -230,14 +239,7 @@ fn replay(
         std::process::exit(2);
     };
     let config: AppConfig = read_json(&config_path);
-    let campaign_context = config
-        .campaign_context
-        .iter()
-        .map(|path| {
-            fs::read_to_string(path)
-                .unwrap_or_else(|error| panic!("cannot read campaign context {path}: {error}"))
-        })
-        .collect::<Vec<_>>();
+    let campaign_context = load_campaign_context(&config);
     let segments: Vec<TranscriptSegment> = fs::read_to_string(&transcript_path)
         .unwrap_or_else(|error| panic!("cannot read {transcript_path}: {error}"))
         .lines()
@@ -262,14 +264,17 @@ fn replay(
 }
 
 fn stream(config_path: Option<String>, output_dir: Option<String>) {
-    let (Some(config_path), Some(output_dir)) = (config_path, output_dir) else {
+    let Some(config_path) = config_path else {
         usage();
         std::process::exit(2);
     };
     let config: AppConfig = read_json(&config_path);
     let campaign_context = load_campaign_context(&config);
+    let output_dir = output_dir
+        .map(PathBuf::from)
+        .unwrap_or_else(default_data_dir);
     fs::create_dir_all(&output_dir)
-        .unwrap_or_else(|error| panic!("cannot create {output_dir}: {error}"));
+        .unwrap_or_else(|error| panic!("cannot create {}: {error}", output_dir.display()));
     let stdin = std::io::stdin();
     let mut recent = Vec::new();
     for line in stdin.lock().lines() {
@@ -283,7 +288,7 @@ fn stream(config_path: Option<String>, output_dir: Option<String>) {
             &config,
             &campaign_context,
             &mut recent,
-            Path::new(&output_dir),
+            &output_dir,
             segment,
         );
     }
@@ -318,7 +323,10 @@ fn process_segment(
         .rev()
         .collect();
     let context = TranscriptContext {
-        session_id: "live-session".into(),
+        session_id: config
+            .session_id
+            .clone()
+            .unwrap_or_else(|| "live-session".into()),
         current: recent.last().cloned().expect("current segment exists"),
         recent: recent_window,
         session_state: Some(SessionState::default()),
@@ -330,8 +338,13 @@ fn process_segment(
         .filter(|agent| agent.enabled)
         .zip(run_enabled_agents(&config.agents, &context))
     {
-        write_agent_output(output_dir, agent, &result);
-        println!("{} -> {}", result.agent_id, agent.output);
+        match write_agent_output(output_dir, agent, &result) {
+            Ok(()) => println!("{} -> {}", result.agent_id, agent.output),
+            Err(error) => eprintln!(
+                "agent {} failed; continuing other agents: {error}",
+                agent.id
+            ),
+        }
     }
 }
 
@@ -346,10 +359,18 @@ fn write_agent_output(
     output_dir: &Path,
     config: &AgentConfig,
     result: &dnd_assistant_core::AgentOutput,
-) {
+) -> Result<(), String> {
+    let configured_path = Path::new(&config.output);
+    if configured_path.is_absolute()
+        || configured_path
+            .components()
+            .any(|component| component == Component::ParentDir)
+    {
+        return Err("output path must be relative and cannot contain '..'".into());
+    }
     let path = output_dir.join(&config.output);
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).expect("agent output directory creates");
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
     match &config.kind {
         AgentKind::Recorder => {
@@ -357,12 +378,37 @@ fn write_agent_output(
                 .create(true)
                 .append(true)
                 .open(path)
-                .expect("recorder output opens");
-            writeln!(file, "{}", result.body).expect("recorder output writes");
+                .map_err(|error| error.to_string())?;
+            writeln!(file, "{}", result.body).map_err(|error| error.to_string())?;
         }
         AgentKind::LiveSummary | AgentKind::NextSteps => {
             fs::write(path, format!("{}\n\n{}", result.title, result.body))
-                .expect("agent output writes");
+                .map_err(|error| error.to_string())?;
         }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::write_agent_output;
+    use dnd_assistant_core::{AgentConfig, AgentKind, AgentOutput};
+    use std::path::Path;
+
+    #[test]
+    fn agent_output_cannot_escape_session_directory() {
+        let config = AgentConfig {
+            id: "bad".into(),
+            kind: AgentKind::Recorder,
+            enabled: true,
+            output: "../outside.jsonl".into(),
+        };
+        let output = AgentOutput {
+            agent_id: "bad".into(),
+            kind: AgentKind::Recorder,
+            title: "Transcript".into(),
+            body: "{}".into(),
+        };
+        assert!(write_agent_output(Path::new("/tmp"), &config, &output).is_err());
     }
 }
