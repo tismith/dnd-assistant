@@ -406,6 +406,7 @@ fn process_segment(
         output_dir: output_dir.to_owned(),
         llm_provider: config.llm.clone(),
         sequence: recent.len(),
+        session_log: session_log.clone(),
     };
     if let Some(dispatcher) = dispatcher {
         if let Err(error) = dispatcher.submit(job) {
