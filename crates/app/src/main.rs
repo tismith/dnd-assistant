@@ -1,7 +1,7 @@
 use dnd_assistant_audio::{default_input_description, downmix_and_resample, start_default_input};
 use dnd_assistant_core::{
     AgentConfig, AgentKind, Event, ReconciliationInput, SegmentStatus, SessionState,
-    SpeakerSegment, TranscriptContext, TranscriptSegment, attribute_speaker, run_enabled_agents,
+    SpeakerSegment, TranscriptContext, TranscriptSegment, attribute_speaker, run_enabled_agents_at,
 };
 use dnd_assistant_models::{default_model_cache_dir, ensure_model};
 use dnd_assistant_stt::WhisperTranscriber;
@@ -371,11 +371,16 @@ fn process_segment(
         session_state: Some(SessionState::default()),
         campaign_context: campaign_context.to_vec(),
     };
-    for (agent, result) in config
-        .agents
-        .iter()
-        .filter(|agent| agent.enabled)
-        .zip(run_enabled_agents(&config.agents, &context))
+    for (agent, result) in
+        config
+            .agents
+            .iter()
+            .filter(|agent| agent.enabled)
+            .zip(run_enabled_agents_at(
+                &config.agents,
+                &context,
+                recent.len(),
+            ))
     {
         match write_agent_output(output_dir, agent, &result) {
             Ok(()) => {
@@ -449,6 +454,8 @@ mod tests {
             kind: AgentKind::Recorder,
             enabled: true,
             output: "../outside.jsonl".into(),
+            instruction: None,
+            run_every_segments: 1,
         };
         let output = AgentOutput {
             agent_id: "bad".into(),
@@ -466,6 +473,8 @@ mod tests {
             kind: AgentKind::Recorder,
             enabled: true,
             output: "events.jsonl".into(),
+            instruction: None,
+            run_every_segments: 1,
         };
         let output = AgentOutput {
             agent_id: "bad".into(),

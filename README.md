@@ -44,6 +44,9 @@ default to `$XDG_DATA_HOME/dnd-assistant/sessions`, or
 Each enabled agent receives the current segment and a rolling 20-segment
 window, plus the configured campaign Markdown contents. The built-in agents
 write a JSONL recorder, a running Markdown summary, and GM next-step options.
+Each agent can set an optional `instruction` and `run_every_segments` cadence;
+the latter is useful for agents that should inspect the rolling context every
+few transcript segments rather than on every update.
 Replace the built-in handlers with model-backed handlers later while retaining
 the same context contract. It also starts a localhost UI at
 `http://127.0.0.1:8787/`; set `DND_ASSISTANT_UI_ADDRESS` to change the bind

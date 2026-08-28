@@ -5,7 +5,8 @@ use std::collections::BTreeMap;
 
 pub mod agents;
 pub use agents::{
-    AgentConfig, AgentKind, AgentOutput, TranscriptContext, run_builtin_agent, run_enabled_agents,
+    AgentConfig, AgentKind, AgentOutput, AgentRequest, TranscriptContext, run_builtin_agent,
+    run_enabled_agents, run_enabled_agents_at,
 };
 
 pub type SegmentId = String;

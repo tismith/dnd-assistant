@@ -15,6 +15,14 @@ pub struct AgentConfig {
     pub kind: AgentKind,
     pub enabled: bool,
     pub output: String,
+    #[serde(default)]
+    pub instruction: Option<String>,
+    #[serde(default = "default_run_every_segments")]
+    pub run_every_segments: usize,
+}
+
+fn default_run_every_segments() -> usize {
+    1
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -24,6 +32,15 @@ pub struct TranscriptContext {
     pub recent: Vec<TranscriptSegment>,
     pub session_state: Option<SessionState>,
     pub campaign_context: Vec<String>,
+}
+
+/// Provider-neutral input for a configured agent. A future LLM runner can
+/// consume this request without changing capture, persistence, or scheduling.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AgentRequest {
+    pub agent_id: String,
+    pub instruction: Option<String>,
+    pub context: TranscriptContext,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -39,9 +56,21 @@ pub fn run_enabled_agents(
     configs: &[AgentConfig],
     context: &TranscriptContext,
 ) -> Vec<AgentOutput> {
+    run_enabled_agents_at(configs, context, 1)
+}
+
+/// Run enabled agents whose configured segment cadence is due. Sequence is
+/// one-based so the first finalized segment always triggers default agents.
+pub fn run_enabled_agents_at(
+    configs: &[AgentConfig],
+    context: &TranscriptContext,
+    sequence: usize,
+) -> Vec<AgentOutput> {
     configs
         .iter()
-        .filter(|config| config.enabled)
+        .filter(|config| {
+            config.enabled && sequence.is_multiple_of(config.run_every_segments.max(1))
+        })
         .map(|config| run_builtin_agent(config, context))
         .collect()
 }
@@ -52,8 +81,14 @@ pub fn run_builtin_agent(config: &AgentConfig, context: &TranscriptContext) -> A
             "Transcript".into(),
             serde_json::to_string(&context.current).expect("transcript segment serializes"),
         ),
-        AgentKind::LiveSummary => ("Live session summary".into(), render_summary(context)),
-        AgentKind::NextSteps => ("GM next-step options".into(), render_next_steps(context)),
+        AgentKind::LiveSummary => (
+            "Live session summary".into(),
+            render_summary(config, context),
+        ),
+        AgentKind::NextSteps => (
+            "GM next-step options".into(),
+            render_next_steps(config, context),
+        ),
     };
     AgentOutput {
         agent_id: config.id.clone(),
@@ -63,8 +98,9 @@ pub fn run_builtin_agent(config: &AgentConfig, context: &TranscriptContext) -> A
     }
 }
 
-fn render_summary(context: &TranscriptContext) -> String {
+fn render_summary(config: &AgentConfig, context: &TranscriptContext) -> String {
     let mut output = String::from("# Live Session Summary\n\n");
+    append_instruction(&mut output, config);
     if let Some(state) = &context.session_state {
         if let Some(location) = &state.current_location {
             output.push_str(&format!("**Current location:** {location}\n\n"));
@@ -77,7 +113,7 @@ fn render_summary(context: &TranscriptContext) -> String {
     output
 }
 
-fn render_next_steps(context: &TranscriptContext) -> String {
+fn render_next_steps(config: &AgentConfig, context: &TranscriptContext) -> String {
     let mut intents = Vec::new();
     for segment in &context.recent {
         let text = segment.text.trim();
@@ -100,6 +136,7 @@ fn render_next_steps(context: &TranscriptContext) -> String {
         }
     }
     let mut output = String::from("Use these as prompts, not prescriptions.\n\n");
+    append_instruction(&mut output, config);
     if intents.is_empty() {
         output.push_str("- No clear player intention detected yet.\n");
     } else {
@@ -117,6 +154,16 @@ fn render_next_steps(context: &TranscriptContext) -> String {
         }
     }
     output
+}
+
+fn append_instruction(output: &mut String, config: &AgentConfig) {
+    if let Some(instruction) = config
+        .instruction
+        .as_deref()
+        .filter(|text| !text.trim().is_empty())
+    {
+        output.push_str(&format!("**Agent focus:** {instruction}\n\n"));
+    }
 }
 
 fn display_segment(segment: &TranscriptSegment) -> String {
@@ -159,6 +206,8 @@ mod tests {
                 kind: AgentKind::LiveSummary,
                 enabled: true,
                 output: "summary.md".into(),
+                instruction: Some("Keep attention on unresolved player questions.".into()),
+                run_every_segments: 1,
             },
             &context,
         );
@@ -168,11 +217,45 @@ mod tests {
                 kind: AgentKind::NextSteps,
                 enabled: true,
                 output: "next.md".into(),
+                instruction: None,
+                run_every_segments: 1,
             },
             &context,
         );
         assert!(summary.body.contains("I search the altar"));
+        assert!(summary.body.contains("unresolved player questions"));
         assert!(next_steps.body.contains("Follow up on: I search the altar"));
         assert!(next_steps.body.contains("Ember Gem"));
+    }
+
+    #[test]
+    fn cadence_skips_agents_until_their_configured_turn() {
+        let config = AgentConfig {
+            id: "summary".into(),
+            kind: AgentKind::LiveSummary,
+            enabled: true,
+            output: "summary.md".into(),
+            instruction: None,
+            run_every_segments: 3,
+        };
+        let context = TranscriptContext {
+            session_id: "session-1".into(),
+            current: segment("1", "We wait"),
+            recent: vec![segment("1", "We wait")],
+            session_state: None,
+            campaign_context: vec![],
+        };
+        assert!(run_enabled_agents_at(&[config.clone()], &context, 1).is_empty());
+        assert_eq!(run_enabled_agents_at(&[config], &context, 3).len(), 1);
+    }
+
+    #[test]
+    fn older_agent_config_defaults_to_every_segment_without_instruction() {
+        let config: AgentConfig = serde_json::from_str(
+            r#"{"id":"summary","kind":"live_summary","enabled":true,"output":"summary.md"}"#,
+        )
+        .unwrap();
+        assert_eq!(config.instruction, None);
+        assert_eq!(config.run_every_segments, 1);
     }
 }
