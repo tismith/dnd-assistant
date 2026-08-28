@@ -49,7 +49,8 @@ Each agent can set an optional `instruction` and `run_every_segments` cadence;
 the latter is useful for agents that should inspect the rolling context every
 few transcript segments rather than on every update.
 Replace the built-in handlers with model-backed handlers later while retaining
-the same context contract. It also starts a localhost UI at
+the same context contract. Agent jobs are queued independently of capture and
+model calls have a bounded timeout. It also starts a localhost UI at
 `http://127.0.0.1:8787/`; set `DND_ASSISTANT_UI_ADDRESS` to change the bind
 address. The UI shows the rolling transcript and latest output from each
 enabled agent. If the UI cannot bind, capture and agent processing continue.

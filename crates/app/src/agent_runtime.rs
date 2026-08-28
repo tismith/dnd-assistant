@@ -11,13 +11,15 @@ pub struct AgentJob {
 }
 
 pub struct AgentDispatcher {
-    sender: Option<mpsc::SyncSender<AgentJob>>,
+    sender: Option<mpsc::Sender<AgentJob>>,
     worker: Option<thread::JoinHandle<()>>,
 }
 
 impl AgentDispatcher {
     pub fn start(ui_state: Option<ui::SharedLiveState>) -> Self {
-        let (sender, receiver) = mpsc::sync_channel::<AgentJob>(8);
+        // Submission must never block transcription. A job contains only the
+        // rolling context and is drained by the independent agent worker.
+        let (sender, receiver) = mpsc::channel::<AgentJob>();
         let worker = thread::spawn(move || {
             for job in receiver {
                 run_job(job, ui_state.as_ref());
