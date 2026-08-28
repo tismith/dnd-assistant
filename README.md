@@ -7,8 +7,8 @@ timestamp-overlap reconciler.
 ## Current status
 
 Milestone 0 is in progress. The Rust workspace builds and tests the domain
-boundary. The current `record` command is a transitional diagnostic that
-captures 16 kHz mono PCM WAV audio through ALSA. The target runtime is a single
+boundary. The `record` command captures a ten-second PCM WAV through native
+CPAL. The target runtime is a single
 Rust executable with in-process capture/inference and first-run model
 downloads; whisper.cpp is not intended to remain a user-installed prerequisite.
 
@@ -28,10 +28,10 @@ cat fixtures/transcript.jsonl | cargo run -p dnd-assistant -- stream agents.exam
 same JSONL contract one line at a time, which is the live boundary for the
 future embedded transcription engine.
 
-`audio-info` and `capture` use the in-process `cpal` capture crate. They are
-the first step toward removing the transitional `arecord` dependency from the
-runtime; `capture` currently reports normalized raw chunks and does not yet
-transcribe them.
+`audio-info`, `capture`, `record`, and `live` use the in-process `cpal` capture
+crate. `capture` reports normalized raw chunks; `record` writes a standard PCM
+WAV for later transcription tests. The `arecord` check in `validate` remains
+only as an optional diagnostic for the older development spike.
 
 `live` is the in-process transcription path. It captures five-second windows,
 downmixes/resamples them to 16 kHz mono, runs the embedded Whisper backend,

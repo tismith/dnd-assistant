@@ -14,9 +14,10 @@ mod ui;
 use session::SessionLog;
 use std::{
     env, fs,
-    io::{BufRead, Write},
+    io::{BufRead, Seek, SeekFrom, Write},
     path::{Component, Path, PathBuf},
     process::Command,
+    time::{Duration, Instant},
 };
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -219,27 +220,67 @@ fn record(path: PathBuf) {
             std::process::exit(1);
         }
     }
+    let capture = start_default_input(128).unwrap_or_else(|error| {
+        eprintln!("audio unavailable: {error}");
+        std::process::exit(1);
+    });
+    let format = capture.format;
+    let mut file = fs::File::create(&path)
+        .unwrap_or_else(|error| panic!("cannot create {}: {error}", path.display()));
+    file.write_all(&wav_header(0, format.sample_rate, format.channels))
+        .unwrap_or_else(|error| panic!("cannot write WAV header: {error}"));
     println!(
-        "Recording 10 seconds to {} (Ctrl-C to stop early)...",
+        "Recording 10 seconds to {} (native CPAL capture)...",
         path.display()
     );
-    let status = Command::new("arecord")
-        .args([
-            "-q", "-D", "default", "-f", "S16_LE", "-r", "16000", "-c", "1", "-d", "10",
-        ])
-        .arg(&path)
-        .status();
-    match status {
-        Ok(status) if status.success() => println!("Audio capture complete: {}", path.display()),
-        Ok(status) => {
-            eprintln!("arecord exited with {status}");
-            std::process::exit(1);
-        }
-        Err(error) => {
-            eprintln!("could not start arecord: {error}");
-            std::process::exit(1);
+    let started = Instant::now();
+    let mut sample_count = 0_u64;
+    while started.elapsed() < Duration::from_secs(10) {
+        if let Ok(chunk) = capture.chunks.recv_timeout(Duration::from_millis(100)) {
+            for sample in chunk.samples {
+                let pcm = (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+                file.write_all(&pcm.to_le_bytes())
+                    .unwrap_or_else(|error| panic!("cannot write WAV data: {error}"));
+                sample_count += 1;
+            }
         }
     }
+    let data_bytes = sample_count.saturating_mul(2);
+    if data_bytes > u32::MAX as u64 {
+        panic!("recording is too large for a classic WAV file");
+    }
+    file.seek(SeekFrom::Start(0))
+        .unwrap_or_else(|error| panic!("cannot seek WAV header: {error}"));
+    file.write_all(&wav_header(
+        data_bytes as u32,
+        format.sample_rate,
+        format.channels,
+    ))
+    .unwrap_or_else(|error| panic!("cannot finalize WAV header: {error}"));
+    file.sync_all()
+        .unwrap_or_else(|error| panic!("cannot sync recording: {error}"));
+    println!("Audio capture complete: {}", path.display());
+}
+
+fn wav_header(data_bytes: u32, sample_rate: u32, channels: u16) -> [u8; 44] {
+    let block_align = channels * 2;
+    let byte_rate = sample_rate * block_align as u32;
+    let riff_size = 36_u32.saturating_add(data_bytes);
+    let mut header = [0_u8; 44];
+    header[0..4].copy_from_slice(b"RIFF");
+    header[4..8].copy_from_slice(&riff_size.to_le_bytes());
+    header[8..12].copy_from_slice(b"WAVE");
+    header[12..16].copy_from_slice(b"fmt ");
+    header[16..20].copy_from_slice(&16_u32.to_le_bytes());
+    header[20..22].copy_from_slice(&1_u16.to_le_bytes());
+    header[22..24].copy_from_slice(&channels.to_le_bytes());
+    header[24..28].copy_from_slice(&sample_rate.to_le_bytes());
+    header[28..32].copy_from_slice(&byte_rate.to_le_bytes());
+    header[32..34].copy_from_slice(&block_align.to_le_bytes());
+    header[34..36].copy_from_slice(&16_u16.to_le_bytes());
+    header[36..40].copy_from_slice(b"data");
+    header[40..44].copy_from_slice(&data_bytes.to_le_bytes());
+    header
 }
 
 fn reconcile_demo() {
@@ -472,7 +513,7 @@ fn write_agent_output(
 
 #[cfg(test)]
 mod tests {
-    use super::write_agent_output;
+    use super::{wav_header, write_agent_output};
     use dnd_assistant_core::{AgentConfig, AgentKind, AgentOutput};
     use std::path::Path;
 
@@ -512,5 +553,15 @@ mod tests {
             body: "{}".into(),
         };
         assert!(write_agent_output(Path::new("/tmp"), &config, &output).is_err());
+    }
+
+    #[test]
+    fn wav_header_describes_pcm_recording() {
+        let header = wav_header(8_820, 44_100, 2);
+        assert_eq!(&header[0..4], b"RIFF");
+        assert_eq!(&header[8..12], b"WAVE");
+        assert_eq!(&header[22..24], &2_u16.to_le_bytes());
+        assert_eq!(&header[24..28], &44_100_u32.to_le_bytes());
+        assert_eq!(&header[40..44], &8_820_u32.to_le_bytes());
     }
 }
