@@ -151,9 +151,17 @@ pub fn downmix_and_resample(
         .collect()
 }
 
+/// Root-mean-square signal level for a normalized mono buffer.
+pub fn rms(samples: &[f32]) -> f32 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+    (samples.iter().map(|sample| sample * sample).sum::<f32>() / samples.len() as f32).sqrt()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::downmix_and_resample;
+    use super::{downmix_and_resample, rms};
 
     #[test]
     fn downmixes_interleaved_stereo_without_resampling() {
@@ -167,5 +175,12 @@ mod tests {
         assert_eq!(result.len(), 4);
         assert_eq!(result[0], 0.0);
         assert_eq!(result[2], 1.0);
+    }
+
+    #[test]
+    fn rms_distinguishes_silence_from_signal() {
+        assert_eq!(rms(&[]), 0.0);
+        assert_eq!(rms(&[0.0, 0.0]), 0.0);
+        assert!((rms(&[0.5, -0.5]) - 0.5).abs() < f32::EPSILON);
     }
 }

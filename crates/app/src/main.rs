@@ -1,4 +1,6 @@
-use dnd_assistant_audio::{default_input_description, downmix_and_resample, start_default_input};
+use dnd_assistant_audio::{
+    default_input_description, downmix_and_resample, rms, start_default_input,
+};
 use dnd_assistant_core::{
     AgentConfig, AgentKind, Event, ReconciliationInput, SegmentStatus, SessionState,
     SpeakerSegment, TranscriptContext, TranscriptSegment, attribute_speaker,
@@ -146,7 +148,14 @@ fn live(model_path: Option<String>, config_path: Option<String>, output_dir: Opt
     let transcription_worker = std::thread::spawn(move || {
         let mut transcriber = transcriber;
         let mut recent = Vec::new();
+        let silence_rms = env::var("DND_ASSISTANT_SILENCE_RMS")
+            .ok()
+            .and_then(|value| value.parse::<f32>().ok())
+            .unwrap_or(0.005);
         for (window_start_ms, audio) in window_receiver {
+            if rms(&audio) < silence_rms {
+                continue;
+            }
             match transcriber.transcribe_window(&audio) {
                 Ok(segments) => {
                     for mut segment in segments {

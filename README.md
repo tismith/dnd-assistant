@@ -56,6 +56,9 @@ address. The UI shows the rolling transcript and latest output from each
 enabled agent. If the UI cannot bind, capture and agent processing continue.
 Every accepted segment is also appended to `events.jsonl` in the session
 directory, independently of the configured agents, for replay and recovery.
+Obviously silent windows are skipped before Whisper inference; adjust the
+normalized RMS threshold with `DND_ASSISTANT_SILENCE_RMS` if the microphone
+needs a different noise floor (the default is `0.005`).
 
 An optional `llm` provider can be configured in the same JSON file for agents
 with `"kind": "llm"`. The endpoint uses the OpenAI-compatible
