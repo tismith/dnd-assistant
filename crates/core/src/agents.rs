@@ -7,6 +7,7 @@ pub enum AgentKind {
     Recorder,
     LiveSummary,
     NextSteps,
+    Llm,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -88,6 +89,10 @@ pub fn run_builtin_agent(config: &AgentConfig, context: &TranscriptContext) -> A
         AgentKind::NextSteps => (
             "GM next-step options".into(),
             render_next_steps(config, context),
+        ),
+        AgentKind::Llm => (
+            "Model agent".into(),
+            "This agent requires a configured model provider.".into(),
         ),
     };
     AgentOutput {

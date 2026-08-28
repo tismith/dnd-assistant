@@ -275,6 +275,7 @@ dependencies = [
  "dnd-assistant-stt",
  "serde",
  "serde_json",
+ "ureq",
 ]
 
 [[package]]

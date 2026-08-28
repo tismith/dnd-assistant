@@ -1,8 +1,13 @@
 {
   "campaign_context": ["campaign/campaign.md"],
+  "llm": {
+    "endpoint": "http://127.0.0.1:8000/v1/chat/completions",
+    "model": "local-model"
+  },
   "agents": [
     { "id": "recorder", "kind": "recorder", "enabled": true, "output": "transcript.jsonl", "run_every_segments": 1 },
     { "id": "summary", "kind": "live_summary", "enabled": true, "output": "summary.md", "instruction": "Keep unresolved player questions visible.", "run_every_segments": 1 },
-    { "id": "gm-next-steps", "kind": "next_steps", "enabled": true, "output": "gm-next-steps.md", "instruction": "Offer choices without prescribing a single action.", "run_every_segments": 3 }
+    { "id": "gm-next-steps", "kind": "next_steps", "enabled": true, "output": "gm-next-steps.md", "instruction": "Offer choices without prescribing a single action.", "run_every_segments": 3 },
+    { "id": "model-copilot", "kind": "llm", "enabled": false, "output": "model-copilot.md", "instruction": "Surface only one concise, campaign-grounded observation.", "run_every_segments": 6 }
   ]
 }

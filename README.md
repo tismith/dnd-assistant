@@ -56,6 +56,13 @@ enabled agent. If the UI cannot bind, capture and agent processing continue.
 Every accepted segment is also appended to `events.jsonl` in the session
 directory, independently of the configured agents, for replay and recovery.
 
+An optional `llm` provider can be configured in the same JSON file for agents
+with `"kind": "llm"`. The endpoint uses the OpenAI-compatible
+`/chat/completions` request shape. Set `api_key_env` when the endpoint needs a
+Bearer token; leave it out for a local endpoint. Network model agents are
+disabled unless explicitly enabled, and their failures do not stop capture or
+the other agents.
+
 To use the family campaign context, change `campaign_context` in a private copy
 of `agents.example.json` to:
 

@@ -5,6 +5,7 @@ use dnd_assistant_core::{
 };
 use dnd_assistant_models::{default_model_cache_dir, ensure_model};
 use dnd_assistant_stt::WhisperTranscriber;
+mod llm;
 mod session;
 mod ui;
 use session::SessionLog;
@@ -24,6 +25,8 @@ struct AppConfig {
     campaign_context: Vec<String>,
     #[serde(default)]
     model_sha256: Option<String>,
+    #[serde(default)]
+    llm: Option<llm::LlmConfig>,
 }
 
 fn main() {
@@ -155,6 +158,7 @@ fn live(model_path: Option<String>, config_path: Option<String>, output_dir: Opt
                             &worker_output_dir,
                             segment,
                             &session_log,
+                            worker_config.llm.as_ref(),
                             Some(&worker_ui_state),
                         );
                     }
@@ -292,6 +296,7 @@ fn replay(
             Path::new(&output_dir),
             segment,
             &session_log,
+            config.llm.as_ref(),
             None,
         );
     }
@@ -327,6 +332,7 @@ fn stream(config_path: Option<String>, output_dir: Option<String>) {
             &output_dir,
             segment,
             &session_log,
+            config.llm.as_ref(),
             None,
         );
     }
@@ -350,6 +356,7 @@ fn process_segment(
     output_dir: &Path,
     segment: TranscriptSegment,
     session_log: &SessionLog,
+    llm_provider: Option<&llm::LlmConfig>,
     ui_state: Option<&ui::SharedLiveState>,
 ) {
     if let Err(error) = session_log.append(&Event::TranscriptSegmentCreated {
@@ -398,13 +405,26 @@ fn process_segment(
                 recent.len(),
             ))
     {
-        match write_agent_output(output_dir, agent, &result) {
-            Ok(()) => {
-                if let Some(ui_state) = ui_state {
-                    ui::update_agent(ui_state, &result);
+        let result = if agent.kind == AgentKind::Llm {
+            llm_provider
+                .ok_or_else(|| "no llm provider is configured".to_owned())
+                .and_then(|provider| llm::run(provider, agent, &context))
+        } else {
+            Ok(result)
+        };
+        match result {
+            Ok(result) => match write_agent_output(output_dir, agent, &result) {
+                Ok(()) => {
+                    if let Some(ui_state) = ui_state {
+                        ui::update_agent(ui_state, &result);
+                    }
+                    println!("{} -> {}", agent.id, agent.output)
                 }
-                println!("{} -> {}", result.agent_id, agent.output)
-            }
+                Err(error) => eprintln!(
+                    "agent {} failed; continuing other agents: {error}",
+                    agent.id
+                ),
+            },
             Err(error) => eprintln!(
                 "agent {} failed; continuing other agents: {error}",
                 agent.id
@@ -449,7 +469,7 @@ fn write_agent_output(
                 .map_err(|error| error.to_string())?;
             writeln!(file, "{}", result.body).map_err(|error| error.to_string())?;
         }
-        AgentKind::LiveSummary | AgentKind::NextSteps => {
+        AgentKind::LiveSummary | AgentKind::NextSteps | AgentKind::Llm => {
             fs::write(path, format!("{}\n\n{}", result.title, result.body))
                 .map_err(|error| error.to_string())?;
         }
