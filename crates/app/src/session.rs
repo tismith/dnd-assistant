@@ -3,13 +3,16 @@ use std::{
     fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
+    sync::{Arc, Mutex},
 };
 
 /// Append-only session event log. Each event is written as one JSON line and
 /// synced before the call returns so a completed event is replayable after a
 /// process crash or agent failure.
+#[derive(Clone)]
 pub struct SessionLog {
     path: PathBuf,
+    write_lock: Arc<Mutex<()>>,
 }
 
 impl SessionLog {
@@ -17,10 +20,15 @@ impl SessionLog {
         fs::create_dir_all(output_dir)?;
         Ok(Self {
             path: output_dir.join("events.jsonl"),
+            write_lock: Arc::new(Mutex::new(())),
         })
     }
 
     pub fn append(&self, event: &Event) -> std::io::Result<()> {
+        let _guard = self
+            .write_lock
+            .lock()
+            .map_err(|_| std::io::Error::other("session event log lock poisoned"))?;
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
@@ -66,6 +74,40 @@ mod tests {
         .unwrap();
         let lines = fs::read_to_string(log.path()).unwrap();
         assert_eq!(lines.lines().count(), 2);
+        assert!(
+            lines
+                .lines()
+                .all(|line| serde_json::from_str::<Event>(line).is_ok())
+        );
+        let _ = fs::remove_file(log.path());
+        let _ = fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn cloned_logs_do_not_interleave_concurrent_events() {
+        let dir = std::env::temp_dir().join(format!(
+            "dnd-assistant-session-concurrent-test-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let log = SessionLog::open(&dir).unwrap();
+        let mut workers = Vec::new();
+        for worker_id in 0..4 {
+            let log = log.clone();
+            workers.push(std::thread::spawn(move || {
+                for event_id in 0..25 {
+                    log.append(&Event::AgentRunRequested {
+                        timestamp_ms: worker_id * 100 + event_id,
+                    })
+                    .unwrap();
+                }
+            }));
+        }
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        let lines = fs::read_to_string(log.path()).unwrap();
+        assert_eq!(lines.lines().count(), 100);
         assert!(
             lines
                 .lines()

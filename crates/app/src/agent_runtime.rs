@@ -1,5 +1,5 @@
-use crate::{llm, ui, write_agent_output};
-use dnd_assistant_core::{AgentConfig, AgentKind, TranscriptContext, run_enabled_agents_at};
+use crate::{llm, session::SessionLog, ui, write_agent_output};
+use dnd_assistant_core::{AgentConfig, AgentKind, Event, TranscriptContext, run_enabled_agents_at};
 use std::{path::PathBuf, sync::mpsc, thread};
 
 pub struct AgentJob {
@@ -8,6 +8,7 @@ pub struct AgentJob {
     pub output_dir: PathBuf,
     pub llm_provider: Option<llm::LlmConfig>,
     pub sequence: usize,
+    pub session_log: SessionLog,
 }
 
 pub struct AgentDispatcher {
@@ -70,6 +71,11 @@ pub fn run_job(job: AgentJob, ui_state: Option<&ui::SharedLiveState>) {
                 job.sequence,
             ))
     {
+        if let Err(error) = job.session_log.append(&Event::AgentRunRequested {
+            timestamp_ms: job.context.current.end_ms,
+        }) {
+            eprintln!("session event log append failed for agent run: {error}");
+        }
         let result = if agent.kind == AgentKind::Llm {
             job.llm_provider
                 .as_ref()
@@ -83,6 +89,12 @@ pub fn run_job(job: AgentJob, ui_state: Option<&ui::SharedLiveState>) {
                 Ok(()) => {
                     if let Some(ui_state) = ui_state {
                         ui::update_agent(ui_state, &result);
+                    }
+                    if let Err(error) = job.session_log.append(&Event::AgentSuggestionCreated {
+                        timestamp_ms: job.context.current.end_ms,
+                        text: result.body.clone(),
+                    }) {
+                        eprintln!("session event log append failed for agent result: {error}");
                     }
                     println!("{} -> {}", agent.id, agent.output);
                 }
@@ -107,11 +119,16 @@ mod tests {
 
     #[test]
     fn dispatcher_drains_configured_agent_jobs() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let output_dir = std::env::temp_dir().join(format!(
-            "dnd-assistant-dispatcher-test-{}",
+            "dnd-assistant-dispatcher-test-{}-{nonce}",
             std::process::id()
         ));
         fs::create_dir_all(&output_dir).unwrap();
+        let session_log = SessionLog::open(&output_dir).unwrap();
         let dispatcher = AgentDispatcher::start(None);
         dispatcher
             .submit(AgentJob {
@@ -149,12 +166,15 @@ mod tests {
                 output_dir: output_dir.clone(),
                 llm_provider: None,
                 sequence: 1,
+                session_log,
             })
             .unwrap();
         dispatcher.finish();
         let summary = fs::read_to_string(output_dir.join("summary.md")).unwrap();
         assert!(summary.contains("We enter the temple"));
         assert!(summary.contains("Keep this concise"));
+        let events = fs::read_to_string(output_dir.join("events.jsonl")).unwrap();
+        assert_eq!(events.lines().count(), 2);
         let _ = fs::remove_file(output_dir.join("summary.md"));
         let _ = fs::remove_dir(output_dir);
     }
