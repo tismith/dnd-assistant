@@ -17,7 +17,7 @@ use std::{
     io::{BufRead, Seek, SeekFrom, Write},
     path::{Component, Path, PathBuf},
     process::Command,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -100,11 +100,10 @@ fn live(model_path: Option<String>, config_path: Option<String>, output_dir: Opt
         usage();
         std::process::exit(2);
     };
-    let config: AppConfig = read_json(&config_path);
+    let mut config: AppConfig = read_json(&config_path);
     let campaign_context = load_campaign_context(&config);
-    let output_dir = output_dir
-        .map(PathBuf::from)
-        .unwrap_or_else(default_data_dir);
+    let output_dir = resolve_output_dir(output_dir, &config);
+    set_default_session_id(&mut config, &output_dir);
     let model_path = if model_path.starts_with("http://") || model_path.starts_with("https://") {
         let filename = model_path
             .rsplit('/')
@@ -211,6 +210,49 @@ fn default_data_dir() -> PathBuf {
         .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")))
         .unwrap_or_else(|| PathBuf::from(".local/share"));
     base.join("dnd-assistant").join("sessions")
+}
+
+fn resolve_output_dir(explicit: Option<String>, config: &AppConfig) -> PathBuf {
+    if let Some(path) = explicit {
+        return PathBuf::from(path);
+    }
+    let session_id = config
+        .session_id
+        .as_deref()
+        .map(sanitize_session_id)
+        .unwrap_or_else(|| {
+            let millis = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |duration| duration.as_millis());
+            format!("session-{millis}")
+        });
+    default_data_dir().join(session_id)
+}
+
+fn set_default_session_id(config: &mut AppConfig, output_dir: &Path) {
+    if config.session_id.is_none() {
+        if let Some(name) = output_dir.file_name().and_then(|name| name.to_str()) {
+            config.session_id = Some(name.to_owned());
+        }
+    }
+}
+
+fn sanitize_session_id(value: &str) -> String {
+    let sanitized: String = value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    if sanitized.is_empty() {
+        "session".into()
+    } else {
+        sanitized
+    }
 }
 
 fn record(path: PathBuf) {
@@ -361,11 +403,10 @@ fn stream(config_path: Option<String>, output_dir: Option<String>) {
         usage();
         std::process::exit(2);
     };
-    let config: AppConfig = read_json(&config_path);
+    let mut config: AppConfig = read_json(&config_path);
     let campaign_context = load_campaign_context(&config);
-    let output_dir = output_dir
-        .map(PathBuf::from)
-        .unwrap_or_else(default_data_dir);
+    let output_dir = resolve_output_dir(output_dir, &config);
+    set_default_session_id(&mut config, &output_dir);
     fs::create_dir_all(&output_dir)
         .unwrap_or_else(|error| panic!("cannot create {}: {error}", output_dir.display()));
     let session_log = SessionLog::open(&output_dir)
@@ -513,7 +554,9 @@ fn write_agent_output(
 
 #[cfg(test)]
 mod tests {
-    use super::{wav_header, write_agent_output};
+    use super::{
+        AppConfig, resolve_output_dir, sanitize_session_id, wav_header, write_agent_output,
+    };
     use dnd_assistant_core::{AgentConfig, AgentKind, AgentOutput};
     use std::path::Path;
 
@@ -563,5 +606,24 @@ mod tests {
         assert_eq!(&header[22..24], &2_u16.to_le_bytes());
         assert_eq!(&header[24..28], &44_100_u32.to_le_bytes());
         assert_eq!(&header[40..44], &8_820_u32.to_le_bytes());
+    }
+
+    #[test]
+    fn default_session_directory_uses_a_safe_configured_id() {
+        let config = AppConfig {
+            session_id: Some("Friday / session 1".into()),
+            agents: vec![],
+            campaign_context: vec![],
+            model_sha256: None,
+            llm: None,
+        };
+        assert_eq!(
+            sanitize_session_id("Friday / session 1"),
+            "Friday---session-1"
+        );
+        assert!(
+            resolve_output_dir(None, &config)
+                .ends_with("dnd-assistant/sessions/Friday---session-1")
+        );
     }
 }

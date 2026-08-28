@@ -39,8 +39,9 @@ and sends finalized segments through the configured agents on a transcription
 worker, keeping microphone draining responsive with bounded backpressure. Its first argument
 may be an existing model path or an HTTP(S) model URL; URL models are cached in
 the XDG cache directory (`$XDG_CACHE_HOME/dnd-assistant/models`, or
-`~/.cache/dnd-assistant/models`) by the Rust-native model manager. Recordings
-default to `$XDG_DATA_HOME/dnd-assistant/sessions`, or
+`~/.cache/dnd-assistant/models`) by the Rust-native model manager. Session
+outputs default to a per-session directory beneath
+`$XDG_DATA_HOME/dnd-assistant/sessions`, or
 `~/.local/share/dnd-assistant/sessions`.
 Each enabled agent receives the current segment and a rolling 20-segment
 window, plus the configured campaign Markdown contents. The built-in agents
