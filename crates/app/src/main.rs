@@ -1,10 +1,11 @@
 use dnd_assistant_audio::{default_input_description, downmix_and_resample, start_default_input};
 use dnd_assistant_core::{
     AgentConfig, AgentKind, Event, ReconciliationInput, SegmentStatus, SessionState,
-    SpeakerSegment, TranscriptContext, TranscriptSegment, attribute_speaker, run_enabled_agents_at,
+    SpeakerSegment, TranscriptContext, TranscriptSegment, attribute_speaker,
 };
 use dnd_assistant_models::{default_model_cache_dir, ensure_model};
 use dnd_assistant_stt::WhisperTranscriber;
+mod agent_runtime;
 mod llm;
 mod session;
 mod ui;
@@ -141,6 +142,7 @@ fn live(model_path: Option<String>, config_path: Option<String>, output_dir: Opt
     let worker_context = campaign_context.clone();
     let worker_output_dir = output_dir.clone();
     let worker_ui_state = ui_state.clone();
+    let agent_dispatcher = agent_runtime::AgentDispatcher::start(Some(ui_state.clone()));
     let transcription_worker = std::thread::spawn(move || {
         let mut transcriber = transcriber;
         let mut recent = Vec::new();
@@ -158,8 +160,8 @@ fn live(model_path: Option<String>, config_path: Option<String>, output_dir: Opt
                             &worker_output_dir,
                             segment,
                             &session_log,
-                            worker_config.llm.as_ref(),
                             Some(&worker_ui_state),
+                            Some(&agent_dispatcher),
                         );
                     }
                 }
@@ -287,6 +289,7 @@ fn replay(
         .unwrap_or_else(|error| panic!("cannot create {output_dir}: {error}"));
     let session_log = SessionLog::open(Path::new(&output_dir))
         .unwrap_or_else(|error| panic!("cannot open session event log: {error}"));
+    let agent_dispatcher = agent_runtime::AgentDispatcher::start(None);
     let mut recent = Vec::new();
     for segment in segments {
         process_segment(
@@ -296,10 +299,11 @@ fn replay(
             Path::new(&output_dir),
             segment,
             &session_log,
-            config.llm.as_ref(),
             None,
+            Some(&agent_dispatcher),
         );
     }
+    agent_dispatcher.finish();
 }
 
 fn stream(config_path: Option<String>, output_dir: Option<String>) {
@@ -316,6 +320,7 @@ fn stream(config_path: Option<String>, output_dir: Option<String>) {
         .unwrap_or_else(|error| panic!("cannot create {}: {error}", output_dir.display()));
     let session_log = SessionLog::open(&output_dir)
         .unwrap_or_else(|error| panic!("cannot open session event log: {error}"));
+    let agent_dispatcher = agent_runtime::AgentDispatcher::start(None);
     let stdin = std::io::stdin();
     let mut recent = Vec::new();
     for line in stdin.lock().lines() {
@@ -332,10 +337,11 @@ fn stream(config_path: Option<String>, output_dir: Option<String>) {
             &output_dir,
             segment,
             &session_log,
-            config.llm.as_ref(),
             None,
+            Some(&agent_dispatcher),
         );
     }
+    agent_dispatcher.finish();
 }
 
 fn load_campaign_context(config: &AppConfig) -> Vec<String> {
@@ -356,8 +362,8 @@ fn process_segment(
     output_dir: &Path,
     segment: TranscriptSegment,
     session_log: &SessionLog,
-    llm_provider: Option<&llm::LlmConfig>,
     ui_state: Option<&ui::SharedLiveState>,
+    dispatcher: Option<&agent_runtime::AgentDispatcher>,
 ) {
     if let Err(error) = session_log.append(&Event::TranscriptSegmentCreated {
         segment: segment.clone(),
@@ -394,42 +400,19 @@ fn process_segment(
         session_state: Some(SessionState::default()),
         campaign_context: campaign_context.to_vec(),
     };
-    for (agent, result) in
-        config
-            .agents
-            .iter()
-            .filter(|agent| agent.enabled)
-            .zip(run_enabled_agents_at(
-                &config.agents,
-                &context,
-                recent.len(),
-            ))
-    {
-        let result = if agent.kind == AgentKind::Llm {
-            llm_provider
-                .ok_or_else(|| "no llm provider is configured".to_owned())
-                .and_then(|provider| llm::run(provider, agent, &context))
-        } else {
-            Ok(result)
-        };
-        match result {
-            Ok(result) => match write_agent_output(output_dir, agent, &result) {
-                Ok(()) => {
-                    if let Some(ui_state) = ui_state {
-                        ui::update_agent(ui_state, &result);
-                    }
-                    println!("{} -> {}", agent.id, agent.output)
-                }
-                Err(error) => eprintln!(
-                    "agent {} failed; continuing other agents: {error}",
-                    agent.id
-                ),
-            },
-            Err(error) => eprintln!(
-                "agent {} failed; continuing other agents: {error}",
-                agent.id
-            ),
+    let job = agent_runtime::AgentJob {
+        configs: config.agents.clone(),
+        context,
+        output_dir: output_dir.to_owned(),
+        llm_provider: config.llm.clone(),
+        sequence: recent.len(),
+    };
+    if let Some(dispatcher) = dispatcher {
+        if let Err(error) = dispatcher.submit(job) {
+            eprintln!("agent dispatcher failed; continuing transcript: {error}");
         }
+    } else {
+        agent_runtime::run_job(job, None);
     }
 }
 

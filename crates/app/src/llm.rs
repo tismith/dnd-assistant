@@ -1,5 +1,6 @@
 use dnd_assistant_core::{AgentConfig, AgentKind, AgentOutput, AgentRequest, TranscriptContext};
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct LlmConfig {
@@ -63,7 +64,11 @@ pub fn run(
             },
         ],
     };
-    let mut call = ureq::post(&provider.endpoint).header("Content-Type", "application/json");
+    let mut call = ureq::post(&provider.endpoint)
+        .config()
+        .timeout_global(Some(Duration::from_secs(30)))
+        .build()
+        .header("Content-Type", "application/json");
     if let Some(variable) = provider.api_key_env.as_deref() {
         let key = std::env::var(variable)
             .map_err(|_| format!("model API key environment variable {variable} is unset"))?;
