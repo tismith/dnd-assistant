@@ -49,6 +49,8 @@ the same context contract. It also starts a localhost UI at
 `http://127.0.0.1:8787/`; set `DND_ASSISTANT_UI_ADDRESS` to change the bind
 address. The UI shows the rolling transcript and latest output from each
 enabled agent. If the UI cannot bind, capture and agent processing continue.
+Every accepted segment is also appended to `events.jsonl` in the session
+directory, independently of the configured agents, for replay and recovery.
 
 To use the family campaign context, change `campaign_context` in a private copy
 of `agents.example.json` to:

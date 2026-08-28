@@ -1,11 +1,13 @@
 use dnd_assistant_audio::{default_input_description, downmix_and_resample, start_default_input};
 use dnd_assistant_core::{
-    AgentConfig, AgentKind, ReconciliationInput, SegmentStatus, SessionState, SpeakerSegment,
-    TranscriptContext, TranscriptSegment, attribute_speaker, run_enabled_agents,
+    AgentConfig, AgentKind, Event, ReconciliationInput, SegmentStatus, SessionState,
+    SpeakerSegment, TranscriptContext, TranscriptSegment, attribute_speaker, run_enabled_agents,
 };
 use dnd_assistant_models::{default_model_cache_dir, ensure_model};
 use dnd_assistant_stt::WhisperTranscriber;
+mod session;
 mod ui;
+use session::SessionLog;
 use std::{
     env, fs,
     io::{BufRead, Write},
@@ -129,6 +131,8 @@ fn live(model_path: Option<String>, config_path: Option<String>, output_dir: Opt
     ui::set_status(&ui_state, "running");
     fs::create_dir_all(&output_dir)
         .unwrap_or_else(|error| panic!("cannot create {}: {error}", output_dir.display()));
+    let session_log = SessionLog::open(&output_dir)
+        .unwrap_or_else(|error| panic!("cannot open session event log: {error}"));
     let channels = capture.format.channels as usize;
     let sample_rate = capture.format.sample_rate;
     let window_input_samples = sample_rate as usize * channels * 5;
@@ -156,6 +160,7 @@ fn live(model_path: Option<String>, config_path: Option<String>, output_dir: Opt
                             &mut recent,
                             &output_dir,
                             segment,
+                            &session_log,
                             Some(&ui_state),
                         );
                     }
@@ -260,6 +265,8 @@ fn replay(
         .collect();
     fs::create_dir_all(&output_dir)
         .unwrap_or_else(|error| panic!("cannot create {output_dir}: {error}"));
+    let session_log = SessionLog::open(Path::new(&output_dir))
+        .unwrap_or_else(|error| panic!("cannot open session event log: {error}"));
     let mut recent = Vec::new();
     for segment in segments {
         process_segment(
@@ -268,6 +275,7 @@ fn replay(
             &mut recent,
             Path::new(&output_dir),
             segment,
+            &session_log,
             None,
         );
     }
@@ -285,6 +293,8 @@ fn stream(config_path: Option<String>, output_dir: Option<String>) {
         .unwrap_or_else(default_data_dir);
     fs::create_dir_all(&output_dir)
         .unwrap_or_else(|error| panic!("cannot create {}: {error}", output_dir.display()));
+    let session_log = SessionLog::open(&output_dir)
+        .unwrap_or_else(|error| panic!("cannot open session event log: {error}"));
     let stdin = std::io::stdin();
     let mut recent = Vec::new();
     for line in stdin.lock().lines() {
@@ -300,6 +310,7 @@ fn stream(config_path: Option<String>, output_dir: Option<String>) {
             &mut recent,
             &output_dir,
             segment,
+            &session_log,
             None,
         );
     }
@@ -322,8 +333,21 @@ fn process_segment(
     recent: &mut Vec<TranscriptSegment>,
     output_dir: &Path,
     segment: TranscriptSegment,
+    session_log: &SessionLog,
     ui_state: Option<&ui::SharedLiveState>,
 ) {
+    if let Err(error) = session_log.append(&Event::TranscriptSegmentCreated {
+        segment: segment.clone(),
+    }) {
+        eprintln!("session event log append failed; continuing agents: {error}");
+    }
+    if segment.status == SegmentStatus::Finalized {
+        if let Err(error) = session_log.append(&Event::TranscriptSegmentFinalized {
+            segment_id: segment.id.clone(),
+        }) {
+            eprintln!("session event log append failed; continuing agents: {error}");
+        }
+    }
     recent.push(segment);
     if let Some(ui_state) = ui_state {
         ui::update_segment(ui_state, recent.last().expect("current segment exists"));
@@ -388,6 +412,9 @@ fn write_agent_output(
     {
         return Err("output path must be relative and cannot contain '..'".into());
     }
+    if configured_path == Path::new("events.jsonl") {
+        return Err("events.jsonl is reserved for the session event log".into());
+    }
     let path = output_dir.join(&config.output);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
@@ -422,6 +449,23 @@ mod tests {
             kind: AgentKind::Recorder,
             enabled: true,
             output: "../outside.jsonl".into(),
+        };
+        let output = AgentOutput {
+            agent_id: "bad".into(),
+            kind: AgentKind::Recorder,
+            title: "Transcript".into(),
+            body: "{}".into(),
+        };
+        assert!(write_agent_output(Path::new("/tmp"), &config, &output).is_err());
+    }
+
+    #[test]
+    fn agent_cannot_overwrite_session_event_log() {
+        let config = AgentConfig {
+            id: "bad".into(),
+            kind: AgentKind::Recorder,
+            enabled: true,
+            output: "events.jsonl".into(),
         };
         let output = AgentOutput {
             agent_id: "bad".into(),

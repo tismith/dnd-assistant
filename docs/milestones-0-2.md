@@ -8,7 +8,7 @@
 - [x] Sample campaign layout with a GM-private fixture.
 - [x] Transitional audio/tool validation and a 10-second ALSA capture command.
 - [x] Architecture decision record and runnable instructions.
-- [ ] Add JSONL append-only event writer with crash-safe line writes.
+- [x] Add JSONL append-only event writer with crash-safe line writes.
 - [ ] Add service health model and structured logs.
 - [ ] Add a tiny local HTTP page that displays fixture transcript events.
 - [x] Add a localhost live-session page with rolling transcript and agent panels.
@@ -31,7 +31,7 @@
   timestamps, text, confidence, source sequence.
 - [x] Feed microphone chunks to the embedded Whisper backend.
 - [ ] Reconcile revisions by stable source sequence, not text matching.
-- [ ] Persist raw STT messages and expose a rolling transcript endpoint.
+- [x] Persist accepted STT segments and expose a rolling transcript API.
 - [x] Show live status, transcript, and agent output in the UI.
 - [ ] Verify a clean-machine runtime needs only the packaged executable and
   first-run model downloads.
