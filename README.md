@@ -35,7 +35,8 @@ transcribe them.
 
 `live` is the in-process transcription path. It captures five-second windows,
 downmixes/resamples them to 16 kHz mono, runs the embedded Whisper backend,
-and sends finalized segments through the configured agents. Its first argument
+and sends finalized segments through the configured agents on a transcription
+worker, keeping microphone draining responsive with bounded backpressure. Its first argument
 may be an existing model path or an HTTP(S) model URL; URL models are cached in
 the XDG cache directory (`$XDG_CACHE_HOME/dnd-assistant/models`, or
 `~/.cache/dnd-assistant/models`) by the Rust-native model manager. Recordings

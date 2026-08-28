@@ -15,7 +15,7 @@ use std::{
     process::Command,
 };
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize)]
 struct AppConfig {
     #[serde(default)]
     session_id: Option<String>,
@@ -114,11 +114,11 @@ fn live(model_path: Option<String>, config_path: Option<String>, output_dir: Opt
     } else {
         PathBuf::from(&model_path)
     };
-    let mut transcriber = WhisperTranscriber::load(&model_path).unwrap_or_else(|error| {
+    let transcriber = WhisperTranscriber::load(&model_path).unwrap_or_else(|error| {
         eprintln!("transcription unavailable: {error}");
         std::process::exit(1);
     });
-    let capture = start_default_input(8).unwrap_or_else(|error| {
+    let capture = start_default_input(128).unwrap_or_else(|error| {
         eprintln!("audio unavailable: {error}");
         std::process::exit(1);
     });
@@ -133,11 +133,40 @@ fn live(model_path: Option<String>, config_path: Option<String>, output_dir: Opt
         .unwrap_or_else(|error| panic!("cannot create {}: {error}", output_dir.display()));
     let session_log = SessionLog::open(&output_dir)
         .unwrap_or_else(|error| panic!("cannot open session event log: {error}"));
+    let (window_sender, window_receiver) = std::sync::mpsc::sync_channel::<(u64, Vec<f32>)>(4);
+    let worker_config = config.clone();
+    let worker_context = campaign_context.clone();
+    let worker_output_dir = output_dir.clone();
+    let worker_ui_state = ui_state.clone();
+    let transcription_worker = std::thread::spawn(move || {
+        let mut transcriber = transcriber;
+        let mut recent = Vec::new();
+        for (window_start_ms, audio) in window_receiver {
+            match transcriber.transcribe_window(&audio) {
+                Ok(segments) => {
+                    for mut segment in segments {
+                        segment.start_ms += window_start_ms;
+                        segment.end_ms += window_start_ms;
+                        segment.status = SegmentStatus::Finalized;
+                        process_segment(
+                            &worker_config,
+                            &worker_context,
+                            &mut recent,
+                            &worker_output_dir,
+                            segment,
+                            &session_log,
+                            Some(&worker_ui_state),
+                        );
+                    }
+                }
+                Err(error) => eprintln!("transcription window failed; continuing capture: {error}"),
+            }
+        }
+    });
     let channels = capture.format.channels as usize;
     let sample_rate = capture.format.sample_rate;
     let window_input_samples = sample_rate as usize * channels * 5;
     let mut input_samples = Vec::with_capacity(window_input_samples);
-    let mut recent = Vec::new();
     let mut window_start_ms = 0_u64;
     println!(
         "live transcription started at {} Hz / {} channels; press Ctrl-C to stop",
@@ -148,28 +177,15 @@ fn live(model_path: Option<String>, config_path: Option<String>, output_dir: Opt
         while input_samples.len() >= window_input_samples {
             let window: Vec<f32> = input_samples.drain(..window_input_samples).collect();
             let audio = downmix_and_resample(&window, channels, sample_rate, 16_000);
-            match transcriber.transcribe_window(&audio) {
-                Ok(segments) => {
-                    for mut segment in segments {
-                        segment.start_ms += window_start_ms;
-                        segment.end_ms += window_start_ms;
-                        segment.status = SegmentStatus::Finalized;
-                        process_segment(
-                            &config,
-                            &campaign_context,
-                            &mut recent,
-                            &output_dir,
-                            segment,
-                            &session_log,
-                            Some(&ui_state),
-                        );
-                    }
-                }
-                Err(error) => eprintln!("transcription window failed; continuing capture: {error}"),
+            if window_sender.send((window_start_ms, audio)).is_err() {
+                eprintln!("transcription worker stopped; ending capture");
+                return;
             }
             window_start_ms += 5_000;
         }
     }
+    drop(window_sender);
+    let _ = transcription_worker.join();
 }
 
 fn default_data_dir() -> PathBuf {
