@@ -235,6 +235,7 @@ mod tests {
             instruction: None,
             prompt_file: None,
             workspace_paths: vec![],
+            workspace_query: None,
             write_paths: vec![],
             include_campaign_context: true,
             run_every_segments: 1,

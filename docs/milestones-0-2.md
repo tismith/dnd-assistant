@@ -49,8 +49,9 @@
 - [ ] Add manual speaker-to-person/character mappings.
 - [ ] Display provisional attribution separately from finalized attribution.
 - [ ] Replay recordings to measure regression without requiring a live table.
-- [ ] Add campaign retrieval fixtures from `family-dnd` without modifying that
-  repository; verify private scope is retained through context construction.
+- [x] Add bounded local Markdown workspace indexing and lexical retrieval
+  without modifying `family-dnd`; verify private scope is retained through
+  per-agent context construction.
 - [x] Define a shared transcript context and configurable agent fan-out.
 - [x] Add deterministic recorder, live-summary, and GM next-step fixtures.
 - [x] Add a session-end campaign supervisor that produces a summary and

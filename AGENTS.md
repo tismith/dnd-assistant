@@ -27,6 +27,9 @@ the architecture to solve later features before those risks are measured.
   configured workspace and may only update explicitly configured `write_paths`.
   Validate all exact-text edits before applying them; keep campaign changes
   reviewable and backed up in the session directory.
+- Workspace reads go through the bounded local Markdown index. Keep workspace
+  roots explicit, preserve source paths in context, and do not turn campaign
+  loading into an unrestricted filesystem walk.
 
 ## Campaign context safety
 

@@ -59,7 +59,10 @@ the latter is useful for agents that should inspect the rolling context every
 few transcript segments rather than on every update.
 Set `include_campaign_context` to `false` for an agent that should not receive
 the legacy global campaign context; it can then use only its explicit
-`workspace_paths`.
+`workspace_paths`. Set `workspace_query` to a fixed lexical query when the
+agent needs a stable slice of the workspace; otherwise the recent transcript
+is used to select relevant documents. The workspace index also exposes bounded
+local `list`, `read`, and `search` operations for the future tool-calling path.
 Replace the built-in handlers with model-backed handlers later while retaining
 the same context contract. Agent jobs are queued independently of capture and
 model calls have a bounded timeout. It also starts a localhost UI at

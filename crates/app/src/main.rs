@@ -12,6 +12,7 @@ mod agent_runtime;
 mod llm;
 mod session;
 mod ui;
+mod workspace;
 use session::SessionLog;
 use std::{
     collections::HashSet,
@@ -736,7 +737,7 @@ fn session_end(config_path: Option<String>, session_dir: Option<String>, apply: 
         .last()
         .cloned()
         .unwrap_or_else(|| panic!("session contains no transcript segments"));
-    let mut workspace_context = agent_runtime::load_workspace_documents(&editor.workspace_paths);
+    let mut workspace_context = workspace::Workspace::load(&editor.workspace_paths).all();
     if let Ok(entries) = fs::read_dir(&session_path) {
         for entry in entries.flatten() {
             let path = entry.path();
@@ -904,6 +905,7 @@ mod tests {
             instruction: None,
             prompt_file: None,
             workspace_paths: vec![],
+            workspace_query: None,
             write_paths: vec![],
             include_campaign_context: true,
             run_every_segments: 1,
@@ -927,6 +929,7 @@ mod tests {
             instruction: None,
             prompt_file: None,
             workspace_paths: vec![],
+            workspace_query: None,
             write_paths: vec![],
             include_campaign_context: true,
             run_every_segments: 1,

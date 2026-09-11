@@ -26,6 +26,9 @@ pub struct AgentConfig {
     /// Files or directories this agent is explicitly allowed to read.
     #[serde(default)]
     pub workspace_paths: Vec<String>,
+    /// Optional lexical query used to select relevant workspace documents.
+    #[serde(default)]
+    pub workspace_query: Option<String>,
     /// Paths this agent may propose changes within during a session-end run.
     #[serde(default)]
     pub write_paths: Vec<String>,
@@ -265,6 +268,7 @@ mod tests {
                 instruction: Some("Keep attention on unresolved player questions.".into()),
                 prompt_file: None,
                 workspace_paths: vec![],
+                workspace_query: None,
                 write_paths: vec![],
                 include_campaign_context: true,
                 run_every_segments: 1,
@@ -280,6 +284,7 @@ mod tests {
                 instruction: None,
                 prompt_file: None,
                 workspace_paths: vec![],
+                workspace_query: None,
                 write_paths: vec![],
                 include_campaign_context: true,
                 run_every_segments: 1,
@@ -302,6 +307,7 @@ mod tests {
             instruction: None,
             prompt_file: None,
             workspace_paths: vec![],
+            workspace_query: None,
             write_paths: vec![],
             include_campaign_context: true,
             run_every_segments: 3,

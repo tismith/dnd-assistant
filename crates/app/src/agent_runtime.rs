@@ -1,17 +1,6 @@
-use crate::{llm, session::SessionLog, ui, write_agent_output};
-use dnd_assistant_core::{
-    AgentConfig, AgentKind, Event, TranscriptContext, WorkspaceDocument, run_builtin_agent,
-};
-use std::{
-    fs,
-    path::{Path, PathBuf},
-    sync::mpsc,
-    thread,
-};
-
-const MAX_WORKSPACE_FILE_BYTES: u64 = 2 * 1024 * 1024;
-const MAX_WORKSPACE_DOCUMENTS: usize = 2_000;
-const MAX_WORKSPACE_TOTAL_BYTES: usize = 32 * 1024 * 1024;
+use crate::{llm, session::SessionLog, ui, workspace::Workspace, write_agent_output};
+use dnd_assistant_core::{AgentConfig, AgentKind, Event, TranscriptContext, run_builtin_agent};
+use std::{path::PathBuf, sync::mpsc, thread};
 
 pub struct AgentJob {
     pub configs: Vec<AgentConfig>,
@@ -123,94 +112,20 @@ fn context_for_agent(context: &TranscriptContext, agent: &AgentConfig) -> Transc
     if !agent.include_campaign_context {
         scoped.campaign_context.clear();
     }
-    scoped.workspace_context = load_workspace_documents(&agent.workspace_paths);
+    let workspace = Workspace::load(&agent.workspace_paths);
+    let query = agent.workspace_query.as_deref().unwrap_or("");
+    let query = if query.is_empty() {
+        context
+            .recent
+            .iter()
+            .map(|segment| segment.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ")
+    } else {
+        query.to_owned()
+    };
+    scoped.workspace_context = workspace.search(&query, 24);
     scoped
-}
-
-pub fn load_workspace_documents(paths: &[String]) -> Vec<WorkspaceDocument> {
-    let mut documents = Vec::new();
-    for configured in paths {
-        let path = Path::new(configured);
-        if path.is_dir() {
-            collect_workspace_files(path, &mut documents);
-        } else if path.is_file() {
-            read_workspace_file(path, &mut documents);
-        } else {
-            eprintln!("agent workspace path does not exist; skipping: {configured}");
-        }
-    }
-    documents
-}
-
-fn collect_workspace_files(directory: &Path, documents: &mut Vec<WorkspaceDocument>) {
-    if documents.len() >= MAX_WORKSPACE_DOCUMENTS {
-        return;
-    }
-    let Ok(entries) = fs::read_dir(directory) else {
-        eprintln!(
-            "cannot read agent workspace directory: {}",
-            directory.display()
-        );
-        return;
-    };
-    let mut entries = entries.flatten().collect::<Vec<_>>();
-    entries.sort_by_key(|entry| entry.path());
-    for entry in entries {
-        if documents.len() >= MAX_WORKSPACE_DOCUMENTS {
-            break;
-        }
-        let path = entry.path();
-        if entry
-            .file_type()
-            .is_ok_and(|file_type| file_type.is_symlink())
-        {
-            continue;
-        }
-        if path.is_dir() {
-            collect_workspace_files(&path, documents);
-        } else if path.extension().is_some_and(|extension| extension == "md") {
-            read_workspace_file(&path, documents);
-        }
-    }
-}
-
-fn read_workspace_file(path: &Path, documents: &mut Vec<WorkspaceDocument>) {
-    if documents.len() >= MAX_WORKSPACE_DOCUMENTS
-        || documents
-            .iter()
-            .map(|document| document.content.len())
-            .sum::<usize>()
-            >= MAX_WORKSPACE_TOTAL_BYTES
-    {
-        return;
-    }
-    let Ok(metadata) = fs::metadata(path) else {
-        eprintln!("cannot inspect agent workspace file: {}", path.display());
-        return;
-    };
-    let remaining = MAX_WORKSPACE_TOTAL_BYTES.saturating_sub(
-        documents
-            .iter()
-            .map(|document| document.content.len())
-            .sum::<usize>(),
-    );
-    if metadata.len() > MAX_WORKSPACE_FILE_BYTES || metadata.len() as usize > remaining {
-        eprintln!(
-            "agent workspace file exceeds the configured context limit; skipping: {}",
-            path.display()
-        );
-        return;
-    }
-    match fs::read_to_string(path) {
-        Ok(content) => documents.push(WorkspaceDocument {
-            path: path.display().to_string(),
-            content,
-        }),
-        Err(error) => eprintln!(
-            "cannot read agent workspace file {}: {error}",
-            path.display()
-        ),
-    }
 }
 
 #[cfg(test)]
@@ -242,6 +157,7 @@ mod tests {
                     instruction: Some("Keep this concise.".into()),
                     prompt_file: None,
                     workspace_paths: vec![],
+                    workspace_query: None,
                     write_paths: vec![],
                     include_campaign_context: true,
                     run_every_segments: 1,
@@ -321,6 +237,7 @@ mod tests {
             instruction: None,
             prompt_file: None,
             workspace_paths: vec![path.display().to_string()],
+            workspace_query: None,
             write_paths: vec![],
             include_campaign_context: false,
             run_every_segments: 1,
