@@ -112,6 +112,10 @@ pub fn run_session_editor(
         "Review this complete session and campaign workspace. Return only valid JSON matching this schema: {{\"summary\": string, \"updates\": [{{\"path\": string, \"reason\": string, \"evidence\": [string], \"find\": string|null, \"replace\": string}}]}}.\nDo not invent facts. Use exact existing text in find for edits.\n{context}"
     );
     let content = complete(provider, &system, &user)?;
+    parse_session_update_plan(&content)
+}
+
+fn parse_session_update_plan(content: &str) -> Result<CampaignUpdatePlan, String> {
     let json = content
         .trim()
         .strip_prefix("```")
@@ -257,5 +261,14 @@ mod tests {
         };
         let error = run(&provider, &config, &context).unwrap_err();
         assert!(error.contains("DND_ASSISTANT_TEST_KEY_UNSET"));
+    }
+
+    #[test]
+    fn session_update_plan_accepts_fenced_json() {
+        let plan =
+            parse_session_update_plan("```json\n{\"summary\":\"A discovery\",\"updates\":[]}\n```")
+                .unwrap();
+        assert_eq!(plan.summary, "A discovery");
+        assert!(plan.updates.is_empty());
     }
 }

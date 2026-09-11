@@ -7,6 +7,7 @@ use std::{
     fs,
     io::{self, Read},
     path::{Path, PathBuf},
+    time::Duration,
 };
 use thiserror::Error;
 
@@ -44,16 +45,29 @@ pub fn ensure_model(
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent)?;
     }
-    let temporary = destination.with_extension("download");
+    let temporary = destination.with_file_name(format!(
+        ".{}.download-{}",
+        destination
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("model"),
+        std::process::id()
+    ));
     let mut response = ureq::get(url)
+        .config()
+        .timeout_global(Some(Duration::from_secs(300)))
+        .build()
         .call()
         .map_err(|error| ModelError::Download(error.to_string()))?;
     let mut reader = response.body_mut().as_reader();
     let mut file = fs::File::create(&temporary)?;
     io::copy(&mut reader, &mut file)?;
     file.sync_all()?;
-    if let Some(expected) = expected_sha256 {
-        verify_checksum(&temporary, expected)?;
+    if let Some(expected) = expected_sha256
+        && let Err(error) = verify_checksum(&temporary, expected)
+    {
+        let _ = fs::remove_file(&temporary);
+        return Err(error);
     }
     fs::rename(&temporary, destination)?;
     Ok(destination.to_owned())

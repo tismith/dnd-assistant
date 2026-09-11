@@ -9,6 +9,10 @@ use std::{
     thread,
 };
 
+const MAX_WORKSPACE_FILE_BYTES: u64 = 2 * 1024 * 1024;
+const MAX_WORKSPACE_DOCUMENTS: usize = 2_000;
+const MAX_WORKSPACE_TOTAL_BYTES: usize = 32 * 1024 * 1024;
+
 pub struct AgentJob {
     pub configs: Vec<AgentConfig>,
     pub context: TranscriptContext,
@@ -136,6 +140,9 @@ pub fn load_workspace_documents(paths: &[String]) -> Vec<WorkspaceDocument> {
 }
 
 fn collect_workspace_files(directory: &Path, documents: &mut Vec<WorkspaceDocument>) {
+    if documents.len() >= MAX_WORKSPACE_DOCUMENTS {
+        return;
+    }
     let Ok(entries) = fs::read_dir(directory) else {
         eprintln!(
             "cannot read agent workspace directory: {}",
@@ -146,7 +153,16 @@ fn collect_workspace_files(directory: &Path, documents: &mut Vec<WorkspaceDocume
     let mut entries = entries.flatten().collect::<Vec<_>>();
     entries.sort_by_key(|entry| entry.path());
     for entry in entries {
+        if documents.len() >= MAX_WORKSPACE_DOCUMENTS {
+            break;
+        }
         let path = entry.path();
+        if entry
+            .file_type()
+            .is_ok_and(|file_type| file_type.is_symlink())
+        {
+            continue;
+        }
         if path.is_dir() {
             collect_workspace_files(&path, documents);
         } else if path.extension().is_some_and(|extension| extension == "md") {
@@ -156,6 +172,32 @@ fn collect_workspace_files(directory: &Path, documents: &mut Vec<WorkspaceDocume
 }
 
 fn read_workspace_file(path: &Path, documents: &mut Vec<WorkspaceDocument>) {
+    if documents.len() >= MAX_WORKSPACE_DOCUMENTS
+        || documents
+            .iter()
+            .map(|document| document.content.len())
+            .sum::<usize>()
+            >= MAX_WORKSPACE_TOTAL_BYTES
+    {
+        return;
+    }
+    let Ok(metadata) = fs::metadata(path) else {
+        eprintln!("cannot inspect agent workspace file: {}", path.display());
+        return;
+    };
+    let remaining = MAX_WORKSPACE_TOTAL_BYTES.saturating_sub(
+        documents
+            .iter()
+            .map(|document| document.content.len())
+            .sum::<usize>(),
+    );
+    if metadata.len() > MAX_WORKSPACE_FILE_BYTES || metadata.len() as usize > remaining {
+        eprintln!(
+            "agent workspace file exceeds the configured context limit; skipping: {}",
+            path.display()
+        );
+        return;
+    }
     match fs::read_to_string(path) {
         Ok(content) => documents.push(WorkspaceDocument {
             path: path.display().to_string(),

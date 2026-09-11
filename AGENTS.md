@@ -54,6 +54,7 @@ Useful checks from the repository root:
 ```sh
 cargo fmt --all -- --check
 cargo test --offline
+cargo clippy --workspace --all-targets --locked -- -D warnings
 bash -n scripts/live-transcription.sh
 git diff --check
 ```

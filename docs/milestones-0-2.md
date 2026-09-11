@@ -12,7 +12,7 @@
 - [ ] Add service health model and structured logs.
 - [ ] Add a tiny local HTTP page that displays fixture transcript events.
 - [x] Add a localhost live-session page with rolling transcript and agent panels.
-- [ ] Add a read-only campaign loader configured for `/home/toby/src/family-dnd`;
+- [x] Add a read-only campaign loader configured by agent workspace paths;
   default all imported documents to `gm_private` until an allowlist exists.
 - [x] Add an in-process microphone capture boundary with `cpal`.
 
@@ -53,3 +53,5 @@
   repository; verify private scope is retained through context construction.
 - [x] Define a shared transcript context and configurable agent fan-out.
 - [x] Add deterministic recorder, live-summary, and GM next-step fixtures.
+- [x] Add a session-end campaign supervisor that produces a summary and
+  validated, allowlisted multi-file update plan.

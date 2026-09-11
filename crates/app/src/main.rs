@@ -14,6 +14,7 @@ mod session;
 mod ui;
 use session::SessionLog;
 use std::{
+    collections::HashSet,
     env, fs,
     io::{BufRead, Seek, SeekFrom, Write},
     path::{Component, Path, PathBuf},
@@ -55,7 +56,7 @@ fn main() {
         Some("record") => record(
             args.next()
                 .map(PathBuf::from)
-                .unwrap_or_else(|| default_data_dir().join("spike.wav")),
+                .unwrap_or_else(default_recording_path),
         ),
         _ => usage(),
     }
@@ -98,7 +99,7 @@ fn capture() {
     for chunk in capture.chunks {
         chunks += 1;
         samples += chunk.samples.len() as u64;
-        if chunks % 20 == 0 {
+        if chunks.is_multiple_of(20) {
             println!("captured {chunks} chunks / {samples} samples");
         }
     }
@@ -221,6 +222,13 @@ fn default_data_dir() -> PathBuf {
     base.join("dnd-assistant").join("sessions")
 }
 
+fn default_recording_path() -> PathBuf {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_millis());
+    default_data_dir().join(format!("recording-{millis}.wav"))
+}
+
 fn resolve_output_dir(explicit: Option<String>, config: &AppConfig) -> PathBuf {
     if let Some(path) = explicit {
         return PathBuf::from(path);
@@ -239,10 +247,10 @@ fn resolve_output_dir(explicit: Option<String>, config: &AppConfig) -> PathBuf {
 }
 
 fn set_default_session_id(config: &mut AppConfig, output_dir: &Path) {
-    if config.session_id.is_none() {
-        if let Some(name) = output_dir.file_name().and_then(|name| name.to_str()) {
-            config.session_id = Some(name.to_owned());
-        }
+    if config.session_id.is_none()
+        && let Some(name) = output_dir.file_name().and_then(|name| name.to_str())
+    {
+        config.session_id = Some(name.to_owned());
     }
 }
 
@@ -265,11 +273,11 @@ fn sanitize_session_id(value: &str) -> String {
 }
 
 fn record(path: PathBuf) {
-    if let Some(parent) = path.parent() {
-        if let Err(error) = fs::create_dir_all(parent) {
-            eprintln!("cannot create {}: {error}", parent.display());
-            std::process::exit(1);
-        }
+    if let Some(parent) = path.parent()
+        && let Err(error) = fs::create_dir_all(parent)
+    {
+        eprintln!("cannot create {}: {error}", parent.display());
+        std::process::exit(1);
     }
     let capture = start_default_input(128).unwrap_or_else(|error| {
         eprintln!("audio unavailable: {error}");
@@ -382,8 +390,10 @@ fn read_pcm16_wav(path: &Path) -> Result<(u32, u16, Vec<f32>), String> {
         return Err("WAV PCM data has an incomplete sample".into());
     }
     let samples = data
-        .chunks_exact(2)
-        .map(|sample| i16::from_le_bytes([sample[0], sample[1]]) as f32 / i16::MAX as f32)
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|sample| i16::from_le_bytes(*sample) as f32 / i16::MAX as f32)
         .collect();
     Ok((sample_rate, channels, samples))
 }
@@ -585,6 +595,7 @@ fn load_campaign_context(config: &AppConfig) -> Vec<String> {
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn process_segment(
     config: &AppConfig,
     campaign_context: &[String],
@@ -600,12 +611,12 @@ fn process_segment(
     }) {
         eprintln!("session event log append failed; continuing agents: {error}");
     }
-    if segment.status == SegmentStatus::Finalized {
-        if let Err(error) = session_log.append(&Event::TranscriptSegmentFinalized {
+    if segment.status == SegmentStatus::Finalized
+        && let Err(error) = session_log.append(&Event::TranscriptSegmentFinalized {
             segment_id: segment.id.clone(),
-        }) {
-            eprintln!("session event log append failed; continuing agents: {error}");
-        }
+        })
+    {
+        eprintln!("session event log append failed; continuing agents: {error}");
     }
     recent.push(segment);
     if let Some(ui_state) = ui_state {
@@ -731,13 +742,12 @@ fn session_end(config_path: Option<String>, session_dir: Option<String>, apply: 
             let path = entry.path();
             if path.is_file()
                 && path.file_name().and_then(|name| name.to_str()) != Some("events.jsonl")
+                && let Ok(content) = fs::read_to_string(&path)
             {
-                if let Ok(content) = fs::read_to_string(&path) {
-                    workspace_context.push(WorkspaceDocument {
-                        path: path.display().to_string(),
-                        content,
-                    });
-                }
+                workspace_context.push(WorkspaceDocument {
+                    path: path.display().to_string(),
+                    content,
+                });
             }
         }
     }
@@ -775,12 +785,22 @@ fn apply_campaign_updates(plan: &CampaignUpdatePlan, write_paths: &[String], ses
         panic!("session_editor has updates but no configured write_paths");
     }
     let mut changes = Vec::new();
+    let mut changed_paths = HashSet::new();
     for update in &plan.updates {
         let path = resolve_allowed_update_path(&update.path, write_paths)
             .unwrap_or_else(|| panic!("update path is outside write_paths: {}", update.path));
+        if !changed_paths.insert(path.clone()) {
+            panic!(
+                "session update plan contains duplicate path: {}",
+                path.display()
+            );
+        }
         let existing = fs::read_to_string(&path).unwrap_or_default();
         let replacement = match &update.find {
             Some(find) => {
+                if find.is_empty() {
+                    panic!("update for {} has an empty find block", path.display());
+                }
                 let matches = existing.matches(find).count();
                 if matches != 1 {
                     panic!(
@@ -795,20 +815,35 @@ fn apply_campaign_updates(plan: &CampaignUpdatePlan, write_paths: &[String], ses
         };
         changes.push((path, existing, replacement));
     }
-    for (path, existing, replacement) in changes {
+    for (index, (path, existing, replacement)) in changes.into_iter().enumerate() {
         if path.exists() {
-            let backup = session_dir
-                .join("campaign-backups")
-                .join(path.file_name().unwrap_or_default());
+            let backup = session_dir.join("campaign-backups").join(format!(
+                "{index}-{}",
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("file")
+            ));
             fs::create_dir_all(backup.parent().unwrap()).unwrap();
             fs::write(&backup, existing).unwrap();
         }
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).unwrap();
         }
-        fs::write(&path, replacement)
+        write_atomic(&path, replacement.as_bytes(), index)
             .unwrap_or_else(|error| panic!("cannot apply update to {}: {error}", path.display()));
     }
+}
+
+fn write_atomic(path: &Path, contents: &[u8], sequence: usize) -> std::io::Result<()> {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("file");
+    let temporary = path.with_file_name(format!(".{file_name}.dnd-assistant-{sequence}.tmp"));
+    let mut file = fs::File::create(&temporary)?;
+    file.write_all(contents)?;
+    file.sync_all()?;
+    fs::rename(temporary, path)
 }
 
 fn resolve_allowed_update_path(update: &str, roots: &[String]) -> Option<PathBuf> {
@@ -820,13 +855,31 @@ fn resolve_allowed_update_path(update: &str, roots: &[String]) -> Option<PathBuf
         return None;
     }
     roots.iter().find_map(|root| {
-        let root = PathBuf::from(root);
+        let root = fs::canonicalize(root).ok()?;
         let candidate = if update_path.is_absolute() {
             update_path.to_owned()
         } else {
             root.join(update_path)
         };
-        candidate.starts_with(&root).then_some(candidate)
+        if candidate.exists() && !candidate.is_file() {
+            return None;
+        }
+        let canonical_candidate = if candidate.exists() {
+            fs::canonicalize(&candidate).ok()?
+        } else {
+            let mut parent = candidate.parent()?;
+            let mut missing = Vec::new();
+            while !parent.exists() {
+                missing.push(parent.file_name()?.to_owned());
+                parent = parent.parent()?;
+            }
+            let mut canonical_parent = fs::canonicalize(parent).ok()?;
+            for component in missing.iter().rev() {
+                canonical_parent.push(component);
+            }
+            canonical_parent.join(candidate.file_name()?)
+        };
+        canonical_candidate.starts_with(&root).then_some(candidate)
     })
 }
 
@@ -960,7 +1013,7 @@ mod tests {
             std::fs::read_to_string(&target).unwrap(),
             "The party found the Wind Bell."
         );
-        assert!(session.join("campaign-backups/canon.md").exists());
+        assert!(session.join("campaign-backups/0-canon.md").exists());
         let _ = std::fs::remove_dir_all(root);
     }
 }

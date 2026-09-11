@@ -148,10 +148,10 @@ pub fn run_builtin_agent(config: &AgentConfig, context: &TranscriptContext) -> A
 fn render_summary(config: &AgentConfig, context: &TranscriptContext) -> String {
     let mut output = String::from("# Live Session Summary\n\n");
     append_instruction(&mut output, config);
-    if let Some(state) = &context.session_state {
-        if let Some(location) = &state.current_location {
-            output.push_str(&format!("**Current location:** {location}\n\n"));
-        }
+    if let Some(state) = &context.session_state
+        && let Some(location) = &state.current_location
+    {
+        output.push_str(&format!("**Current location:** {location}\n\n"));
     }
     output.push_str("## Recent transcript\n\n");
     for segment in &context.recent {
@@ -303,7 +303,7 @@ mod tests {
             campaign_context: vec![],
             workspace_context: vec![],
         };
-        assert!(run_enabled_agents_at(&[config.clone()], &context, 1).is_empty());
+        assert!(run_enabled_agents_at(std::slice::from_ref(&config), &context, 1).is_empty());
         assert_eq!(run_enabled_agents_at(&[config], &context, 3).len(), 1);
     }
 
