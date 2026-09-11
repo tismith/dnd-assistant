@@ -57,6 +57,9 @@ write a JSONL recorder, a running Markdown summary, and GM next-step options.
 Each agent can set an optional `instruction` and `run_every_segments` cadence;
 the latter is useful for agents that should inspect the rolling context every
 few transcript segments rather than on every update.
+Set `include_campaign_context` to `false` for an agent that should not receive
+the legacy global campaign context; it can then use only its explicit
+`workspace_paths`.
 Replace the built-in handlers with model-backed handlers later while retaining
 the same context contract. Agent jobs are queued independently of capture and
 model calls have a bounded timeout. It also starts a localhost UI at

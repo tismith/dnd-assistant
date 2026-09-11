@@ -905,6 +905,7 @@ mod tests {
             prompt_file: None,
             workspace_paths: vec![],
             write_paths: vec![],
+            include_campaign_context: true,
             run_every_segments: 1,
         };
         let output = AgentOutput {
@@ -927,6 +928,7 @@ mod tests {
             prompt_file: None,
             workspace_paths: vec![],
             write_paths: vec![],
+            include_campaign_context: true,
             run_every_segments: 1,
         };
         let output = AgentOutput {

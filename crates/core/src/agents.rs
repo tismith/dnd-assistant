@@ -29,12 +29,20 @@ pub struct AgentConfig {
     /// Paths this agent may propose changes within during a session-end run.
     #[serde(default)]
     pub write_paths: Vec<String>,
+    /// Whether this agent receives the legacy global campaign_context list.
+    /// New agents can set this false and use only workspace_paths.
+    #[serde(default = "default_include_campaign_context")]
+    pub include_campaign_context: bool,
     #[serde(default = "default_run_every_segments")]
     pub run_every_segments: usize,
 }
 
 fn default_run_every_segments() -> usize {
     1
+}
+
+fn default_include_campaign_context() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -258,6 +266,7 @@ mod tests {
                 prompt_file: None,
                 workspace_paths: vec![],
                 write_paths: vec![],
+                include_campaign_context: true,
                 run_every_segments: 1,
             },
             &context,
@@ -272,6 +281,7 @@ mod tests {
                 prompt_file: None,
                 workspace_paths: vec![],
                 write_paths: vec![],
+                include_campaign_context: true,
                 run_every_segments: 1,
             },
             &context,
@@ -293,6 +303,7 @@ mod tests {
             prompt_file: None,
             workspace_paths: vec![],
             write_paths: vec![],
+            include_campaign_context: true,
             run_every_segments: 3,
         };
         let context = TranscriptContext {

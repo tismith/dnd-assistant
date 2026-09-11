@@ -120,6 +120,9 @@ pub fn run_job(job: AgentJob, ui_state: Option<&ui::SharedLiveState>) {
 
 fn context_for_agent(context: &TranscriptContext, agent: &AgentConfig) -> TranscriptContext {
     let mut scoped = context.clone();
+    if !agent.include_campaign_context {
+        scoped.campaign_context.clear();
+    }
     scoped.workspace_context = load_workspace_documents(&agent.workspace_paths);
     scoped
 }
@@ -240,6 +243,7 @@ mod tests {
                     prompt_file: None,
                     workspace_paths: vec![],
                     write_paths: vec![],
+                    include_campaign_context: true,
                     run_every_segments: 1,
                 }],
                 context: TranscriptContext {
@@ -303,7 +307,7 @@ mod tests {
             },
             recent: vec![],
             session_state: None,
-            campaign_context: vec![],
+            campaign_context: vec!["gm secret".into()],
             workspace_context: vec![WorkspaceDocument {
                 path: "global.md".into(),
                 content: "must be replaced".into(),
@@ -318,9 +322,11 @@ mod tests {
             prompt_file: None,
             workspace_paths: vec![path.display().to_string()],
             write_paths: vec![],
+            include_campaign_context: false,
             run_every_segments: 1,
         };
         let scoped = context_for_agent(&context, &agent);
+        assert!(scoped.campaign_context.is_empty());
         assert_eq!(
             scoped.workspace_context,
             vec![WorkspaceDocument {
