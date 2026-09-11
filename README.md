@@ -68,7 +68,10 @@ the same context contract. Agent jobs are queued independently of capture and
 model calls have a bounded timeout. It also starts a localhost UI at
 `http://127.0.0.1:8787/`; set `DND_ASSISTANT_UI_ADDRESS` to change the bind
 address. The UI shows the rolling transcript and latest output from each
-enabled agent. If the UI cannot bind, capture and agent processing continue.
+enabled agent and provides Start, Pause/Resume, and Stop session controls.
+The live command waits in `ready` until Start is pressed; set
+`DND_ASSISTANT_AUTO_START=1` for headless or command-line use. If the UI
+cannot bind, capture automatically starts and agent processing continues.
 Every accepted segment is also appended to `events.jsonl` in the session
 directory, independently of the configured agents, for replay and recovery.
 Obviously silent windows are skipped before Whisper inference; adjust the

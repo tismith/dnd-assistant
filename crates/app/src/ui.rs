@@ -12,6 +12,10 @@ pub const DEFAULT_UI_ADDRESS: &str = "127.0.0.1:8787";
 #[derive(Debug, Default, Serialize)]
 pub struct LiveState {
     pub status: String,
+    pub session_active: bool,
+    pub paused: bool,
+    #[serde(skip)]
+    pub stop_requested: bool,
     pub transcript: Vec<TranscriptSegment>,
     pub agent_outputs: Vec<AgentPanel>,
 }
@@ -67,6 +71,40 @@ pub fn set_status(state: &SharedLiveState, status: impl Into<String>) {
     }
 }
 
+pub fn start_session(state: &SharedLiveState) {
+    if let Ok(mut state) = state.lock() {
+        state.session_active = true;
+        state.paused = false;
+        state.stop_requested = false;
+        state.status = "running".into();
+    }
+}
+
+pub fn toggle_pause(state: &SharedLiveState) {
+    if let Ok(mut state) = state.lock()
+        && state.session_active
+    {
+        state.paused = !state.paused;
+        state.status = if state.paused { "paused" } else { "running" }.into();
+    }
+}
+
+pub fn stop_session(state: &SharedLiveState) {
+    if let Ok(mut state) = state.lock() {
+        state.session_active = false;
+        state.paused = false;
+        state.stop_requested = true;
+        state.status = "stopping".into();
+    }
+}
+
+pub fn control_snapshot(state: &SharedLiveState) -> (bool, bool, bool) {
+    state
+        .lock()
+        .map(|state| (state.session_active, state.paused, state.stop_requested))
+        .unwrap_or((false, false, true))
+}
+
 pub fn start(
     state: SharedLiveState,
     address: String,
@@ -86,21 +124,35 @@ fn serve(mut stream: TcpStream, state: &SharedLiveState) {
     let mut request = [0_u8; 1024];
     let bytes_read = stream.read(&mut request).unwrap_or(0);
     let request = String::from_utf8_lossy(&request[..bytes_read]);
-    let path = request
+    let request_parts = request
         .lines()
         .next()
-        .and_then(|line| line.split_whitespace().nth(1))
-        .unwrap_or("/");
-    match path {
-        "/" => respond(
+        .map(|line| line.split_whitespace())
+        .map(|mut parts| (parts.next().unwrap_or("GET"), parts.next().unwrap_or("/")))
+        .unwrap_or(("GET", "/"));
+    let (method, path) = request_parts;
+    match (method, path) {
+        ("GET", "/") => respond(
             &mut stream,
             "200 OK",
             "text/html; charset=utf-8",
             INDEX_HTML,
         ),
-        "/api/state" => {
+        ("GET", "/api/state") => {
             let body = state_json(state);
             respond(&mut stream, "200 OK", "application/json", &body);
+        }
+        ("POST", "/api/session/start") => {
+            start_session(state);
+            respond(&mut stream, "200 OK", "application/json", "{\"ok\":true}");
+        }
+        ("POST", "/api/session/pause") => {
+            toggle_pause(state);
+            respond(&mut stream, "200 OK", "application/json", "{\"ok\":true}");
+        }
+        ("POST", "/api/session/stop") => {
+            stop_session(state);
+            respond(&mut stream, "200 OK", "application/json", "{\"ok\":true}");
         }
         _ => respond(
             &mut stream,
@@ -138,6 +190,9 @@ const INDEX_HTML: &str = r##"<!doctype html>
     :root { color-scheme: dark; font: 16px system-ui, sans-serif; }
     body { margin: 0; background: #17151d; color: #eee9e1; }
     header { padding: 1rem 1.4rem; border-bottom: 1px solid #3b3548; display: flex; justify-content: space-between; }
+    .controls { display: flex; gap: .6rem; padding: .8rem 1rem 0; }
+    button { border: 1px solid #62577a; border-radius: .35rem; padding: .5rem .8rem; background: #332d43; color: #eee9e1; cursor: pointer; }
+    button:disabled { cursor: not-allowed; opacity: .45; }
     main { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(18rem, 1fr); gap: 1rem; padding: 1rem; }
     section { background: #211e2a; border: 1px solid #3b3548; border-radius: .5rem; padding: 1rem; }
     h1, h2, h3 { margin-top: 0; } h1 { font-size: 1.2rem; } h2 { font-size: 1rem; }
@@ -150,15 +205,21 @@ const INDEX_HTML: &str = r##"<!doctype html>
 </head>
 <body>
   <header><h1>LIVE SESSION</h1><span id="status" class="status">starting</span></header>
+  <nav class="controls"><button id="start" onclick="action('start')">Start session</button><button id="pause" onclick="action('pause')">Pause</button><button id="stop" onclick="action('stop')">Stop session</button></nav>
   <main><section><h2>Transcript</h2><div id="transcript">Waiting for transcript…</div></section>
     <section><h2>Agents</h2><div id="agents">Waiting for agent output…</div></section></main>
   <script>
     const esc = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     const time = ms => `${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}`;
+    async function action(name) { await fetch(`/api/session/${name}`, { method: 'POST' }); await refresh(); }
     async function refresh() {
       try {
         const state = await (await fetch('/api/state')).json();
         document.querySelector('#status').textContent = state.status;
+        document.querySelector('#start').disabled = state.session_active;
+        document.querySelector('#pause').disabled = !state.session_active;
+        document.querySelector('#pause').textContent = state.paused ? 'Resume' : 'Pause';
+        document.querySelector('#stop').disabled = !state.session_active;
         document.querySelector('#transcript').innerHTML = state.transcript.length ? state.transcript.map(s =>
           `<div class="segment"><span class="time">${time(s.start_ms)}</span> <span class="speaker">${esc(s.speaker_id || 'unknown speaker')}</span><br>${esc(s.text)}</div>`).join('') : 'Waiting for transcript…';
         document.querySelector('#agents').innerHTML = state.agent_outputs.length ? state.agent_outputs.map(a =>
@@ -219,5 +280,19 @@ mod tests {
         set_status(&state, "running");
         let snapshot = state_json(&state);
         assert!(snapshot.contains("\"status\":\"running\""));
+    }
+
+    #[test]
+    fn session_controls_transition_cleanly() {
+        let state = new_state();
+        assert_eq!(control_snapshot(&state), (false, false, false));
+        start_session(&state);
+        assert_eq!(control_snapshot(&state), (true, false, false));
+        toggle_pause(&state);
+        assert_eq!(control_snapshot(&state), (true, true, false));
+        toggle_pause(&state);
+        assert_eq!(control_snapshot(&state), (true, false, false));
+        stop_session(&state);
+        assert_eq!(control_snapshot(&state), (false, false, true));
     }
 }

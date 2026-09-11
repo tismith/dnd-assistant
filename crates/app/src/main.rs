@@ -142,10 +142,21 @@ fn live(model_path: Option<String>, config_path: Option<String>, output_dir: Opt
     let ui_state = ui::new_state();
     let ui_address =
         env::var("DND_ASSISTANT_UI_ADDRESS").unwrap_or_else(|_| ui::DEFAULT_UI_ADDRESS.into());
-    if let Err(error) = ui::start(ui_state.clone(), ui_address) {
-        eprintln!("live UI unavailable; continuing without it: {error}");
+    let ui_available = match ui::start(ui_state.clone(), ui_address) {
+        Ok(_) => true,
+        Err(error) => {
+            eprintln!("live UI unavailable; continuing without it: {error}");
+            false
+        }
+    };
+    let auto_start = env::var("DND_ASSISTANT_AUTO_START")
+        .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+        .unwrap_or(!ui_available);
+    if auto_start {
+        ui::start_session(&ui_state);
+    } else {
+        ui::set_status(&ui_state, "ready");
     }
-    ui::set_status(&ui_state, "running");
     fs::create_dir_all(&output_dir)
         .unwrap_or_else(|error| panic!("cannot create {}: {error}", output_dir.display()));
     let session_log = SessionLog::open(&output_dir)
@@ -198,7 +209,24 @@ fn live(model_path: Option<String>, config_path: Option<String>, output_dir: Opt
         "live transcription started at {} Hz / {} channels; press Ctrl-C to stop",
         sample_rate, channels
     );
-    for chunk in capture.chunks {
+    loop {
+        let (_, _, stop_requested) = ui::control_snapshot(&ui_state);
+        if stop_requested {
+            break;
+        }
+        let chunk = match capture.chunks.recv_timeout(Duration::from_millis(100)) {
+            Ok(chunk) => chunk,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        };
+        let (active, paused, stop_requested) = ui::control_snapshot(&ui_state);
+        if stop_requested {
+            break;
+        }
+        if !active || paused {
+            input_samples.clear();
+            continue;
+        }
         input_samples.extend(chunk.samples);
         while input_samples.len() >= window_input_samples {
             let window: Vec<f32> = input_samples.drain(..window_input_samples).collect();
@@ -212,6 +240,7 @@ fn live(model_path: Option<String>, config_path: Option<String>, output_dir: Opt
     }
     drop(window_sender);
     let _ = transcription_worker.join();
+    ui::set_status(&ui_state, "stopped");
 }
 
 fn default_data_dir() -> PathBuf {
