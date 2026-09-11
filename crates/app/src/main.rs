@@ -43,6 +43,9 @@ fn main() {
         Some("reconcile-demo") => reconcile_demo(),
         Some("replay") => replay(args.next(), args.next(), args.next()),
         Some("stream") => stream(args.next(), args.next()),
+        Some("transcribe-wav") => {
+            transcribe_wav(args.next(), args.next(), args.next(), args.next())
+        }
         Some("record") => record(
             args.next()
                 .map(PathBuf::from)
@@ -325,6 +328,136 @@ fn wav_header(data_bytes: u32, sample_rate: u32, channels: u16) -> [u8; 44] {
     header
 }
 
+fn read_pcm16_wav(path: &Path) -> Result<(u32, u16, Vec<f32>), String> {
+    let bytes =
+        fs::read(path).map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        return Err("WAV must have RIFF/WAVE headers".into());
+    }
+    let mut offset = 12;
+    let mut format = None;
+    let mut data = None;
+    while offset + 8 <= bytes.len() {
+        let chunk_id = &bytes[offset..offset + 4];
+        let chunk_size = u32::from_le_bytes(
+            bytes[offset + 4..offset + 8]
+                .try_into()
+                .expect("chunk size has four bytes"),
+        ) as usize;
+        offset += 8;
+        let end = offset
+            .checked_add(chunk_size)
+            .ok_or_else(|| "WAV chunk size overflows the file".to_owned())?;
+        if end > bytes.len() {
+            return Err("WAV chunk extends past the end of the file".into());
+        }
+        match chunk_id {
+            b"fmt " if chunk_size >= 16 => {
+                let chunk = &bytes[offset..end];
+                format = Some((
+                    u16::from_le_bytes(chunk[0..2].try_into().unwrap()),
+                    u16::from_le_bytes(chunk[2..4].try_into().unwrap()),
+                    u32::from_le_bytes(chunk[4..8].try_into().unwrap()),
+                    u16::from_le_bytes(chunk[14..16].try_into().unwrap()),
+                ));
+            }
+            b"data" => data = Some(&bytes[offset..end]),
+            _ => {}
+        }
+        offset = end + (chunk_size & 1);
+    }
+    let (audio_format, channels, sample_rate, bits_per_sample) =
+        format.ok_or_else(|| "WAV has no PCM format chunk".to_owned())?;
+    if audio_format != 1 || channels == 0 || bits_per_sample != 16 {
+        return Err("WAV must contain signed 16-bit PCM audio".into());
+    }
+    let data = data.ok_or_else(|| "WAV has no data chunk".to_owned())?;
+    if data.len() % 2 != 0 {
+        return Err("WAV PCM data has an incomplete sample".into());
+    }
+    let samples = data
+        .chunks_exact(2)
+        .map(|sample| i16::from_le_bytes([sample[0], sample[1]]) as f32 / i16::MAX as f32)
+        .collect();
+    Ok((sample_rate, channels, samples))
+}
+
+fn transcribe_wav(
+    model_path: Option<String>,
+    wav_path: Option<String>,
+    config_path: Option<String>,
+    output_dir: Option<String>,
+) {
+    let (Some(model_path), Some(wav_path), Some(config_path)) = (model_path, wav_path, config_path)
+    else {
+        usage();
+        std::process::exit(2);
+    };
+    let mut config: AppConfig = read_json(&config_path);
+    let campaign_context = load_campaign_context(&config);
+    let output_dir = resolve_output_dir(output_dir, &config);
+    set_default_session_id(&mut config, &output_dir);
+    let model_path = if model_path.starts_with("http://") || model_path.starts_with("https://") {
+        let filename = model_path
+            .rsplit('/')
+            .next()
+            .filter(|name| !name.is_empty())
+            .unwrap_or("model.bin");
+        let destination = default_model_cache_dir().join(filename);
+        ensure_model(&model_path, &destination, config.model_sha256.as_deref())
+            .unwrap_or_else(|error| panic!("model download unavailable: {error}"))
+    } else {
+        PathBuf::from(model_path)
+    };
+    let mut transcriber = WhisperTranscriber::load(&model_path)
+        .unwrap_or_else(|error| panic!("transcription unavailable: {error}"));
+    let (sample_rate, channels, samples) = read_pcm16_wav(Path::new(&wav_path))
+        .unwrap_or_else(|error| panic!("cannot parse {wav_path}: {error}"));
+    let audio = downmix_and_resample(&samples, channels as usize, sample_rate, 16_000);
+    fs::create_dir_all(&output_dir)
+        .unwrap_or_else(|error| panic!("cannot create {}: {error}", output_dir.display()));
+    let session_log = SessionLog::open(&output_dir)
+        .unwrap_or_else(|error| panic!("cannot open session event log: {error}"));
+    let agent_dispatcher = agent_runtime::AgentDispatcher::start(None);
+    let mut recent = Vec::new();
+    let silence_rms = env::var("DND_ASSISTANT_SILENCE_RMS")
+        .ok()
+        .and_then(|value| value.parse::<f32>().ok())
+        .unwrap_or(0.005);
+    println!(
+        "Transcribing {} ({} Hz / {} channels)...",
+        wav_path, sample_rate, channels
+    );
+    for (window_index, window) in audio.chunks(16_000 * 5).enumerate() {
+        if rms(window) < silence_rms {
+            continue;
+        }
+        match transcriber.transcribe_window(window) {
+            Ok(segments) => {
+                for mut segment in segments {
+                    let window_start_ms = window_index as u64 * 5_000;
+                    segment.start_ms += window_start_ms;
+                    segment.end_ms += window_start_ms;
+                    segment.status = SegmentStatus::Finalized;
+                    process_segment(
+                        &config,
+                        &campaign_context,
+                        &mut recent,
+                        &output_dir,
+                        segment,
+                        &session_log,
+                        None,
+                        Some(&agent_dispatcher),
+                    );
+                }
+            }
+            Err(error) => eprintln!("transcription window failed; continuing: {error}"),
+        }
+    }
+    agent_dispatcher.finish();
+    println!("Transcription complete: {}", output_dir.display());
+}
+
 fn reconcile_demo() {
     let segment = TranscriptSegment {
         id: "demo-1".into(),
@@ -351,7 +484,7 @@ fn reconcile_demo() {
 
 fn usage() {
     println!(
-        "Usage: cargo run -p dnd-assistant -- <validate|audio-info|capture|live <model> <config.json> [output-dir]|record [path]|reconcile-demo|replay <config.json> <transcript.jsonl> <output-dir>|stream <config.json> [output-dir]>"
+        "Usage: cargo run -p dnd-assistant -- <validate|audio-info|capture|live <model> <config.json> [output-dir]|record [path]|transcribe-wav <model> <recording.wav> <config.json> [output-dir]|reconcile-demo|replay <config.json> <transcript.jsonl> <output-dir>|stream <config.json> [output-dir]>"
     );
 }
 
@@ -555,7 +688,8 @@ fn write_agent_output(
 #[cfg(test)]
 mod tests {
     use super::{
-        AppConfig, resolve_output_dir, sanitize_session_id, wav_header, write_agent_output,
+        AppConfig, read_pcm16_wav, resolve_output_dir, sanitize_session_id, wav_header,
+        write_agent_output,
     };
     use dnd_assistant_core::{AgentConfig, AgentKind, AgentOutput};
     use std::path::Path;
@@ -606,6 +740,24 @@ mod tests {
         assert_eq!(&header[22..24], &2_u16.to_le_bytes());
         assert_eq!(&header[24..28], &44_100_u32.to_le_bytes());
         assert_eq!(&header[40..44], &8_820_u32.to_le_bytes());
+    }
+
+    #[test]
+    fn pcm_wav_reader_handles_native_recording() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("dnd-assistant-wav-{nonce}.wav"));
+        let mut bytes = wav_header(4, 8_000, 1).to_vec();
+        bytes.extend_from_slice(&i16::MIN.to_le_bytes());
+        bytes.extend_from_slice(&i16::MAX.to_le_bytes());
+        std::fs::write(&path, bytes).unwrap();
+        let (sample_rate, channels, samples) = read_pcm16_wav(&path).unwrap();
+        assert_eq!((sample_rate, channels), (8_000, 1));
+        assert_eq!(samples.len(), 2);
+        assert!(samples[0] < -0.99 && samples[1] > 0.99);
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

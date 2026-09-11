@@ -20,6 +20,7 @@ cargo run -p dnd-assistant -- capture
 cargo run -p dnd-assistant -- live /path/to/ggml-base.en.bin agents.example.json
 cargo run -p dnd-assistant -- reconcile-demo
 cargo run -p dnd-assistant -- record
+cargo run -p dnd-assistant -- transcribe-wav /path/to/model.bin /path/to/recording.wav agents.example.json
 cargo run -p dnd-assistant -- replay agents.example.json fixtures/transcript.jsonl "${XDG_DATA_HOME:-$HOME/.local/share}/dnd-assistant/sessions/replay"
 cat fixtures/transcript.jsonl | cargo run -p dnd-assistant -- stream agents.example.json
 ```
@@ -30,7 +31,9 @@ future embedded transcription engine.
 
 `audio-info`, `capture`, `record`, and `live` use the in-process `cpal` capture
 crate. `capture` reports normalized raw chunks; `record` writes a standard PCM
-WAV for later transcription tests. The `arecord` check in `validate` remains
+WAV. `transcribe-wav` reads that WAV format directly, resamples it, and sends
+the resulting finalized transcript through the same event log and agents as
+the live path. The `arecord` check in `validate` remains
 only as an optional diagnostic for the older development spike.
 
 `live` is the in-process transcription path. It captures five-second windows,
