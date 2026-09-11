@@ -803,10 +803,24 @@ fn session_end(config_path: Option<String>, session_dir: Option<String>, apply: 
     println!("Campaign update summary: {}", summary_path.display());
     println!("Campaign update plan: {}", plan_path.display());
     if apply {
-        apply_campaign_updates(&plan, &editor.write_paths, &session_path);
+        let write_paths = default_workspace_paths(&editor.write_paths);
+        apply_campaign_updates(&plan, &write_paths, &session_path);
         println!("Campaign updates applied.");
     } else {
         println!("Review the plan, then rerun with --apply to update configured campaign paths.");
+    }
+}
+
+fn default_workspace_paths(configured: &[String]) -> Vec<String> {
+    if configured.is_empty() {
+        vec![
+            env::current_dir()
+                .unwrap_or_else(|error| panic!("cannot determine workspace directory: {error}"))
+                .display()
+                .to_string(),
+        ]
+    } else {
+        configured.to_vec()
     }
 }
 

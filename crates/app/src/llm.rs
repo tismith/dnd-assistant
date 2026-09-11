@@ -173,9 +173,8 @@ fn load_prompt(config: &AgentConfig) -> Result<String, String> {
     let file = config
         .prompt_file
         .as_deref()
-        .map(std::fs::read_to_string)
-        .transpose()
-        .map_err(|error| format!("cannot read agent prompt file: {error}"))?
+        .map(read_prompt_file)
+        .transpose()?
         .unwrap_or_default();
     let prompt = [file.trim(), inline]
         .into_iter()
@@ -189,6 +188,19 @@ fn load_prompt(config: &AgentConfig) -> Result<String, String> {
         )
     } else {
         Ok(prompt)
+    }
+}
+
+fn read_prompt_file(path: &str) -> Result<String, String> {
+    if let Ok(content) = std::fs::read_to_string(path) {
+        return Ok(content);
+    }
+    match path {
+        "prompts/gm-copilot.md" => Ok(include_str!("../../../prompts/gm-copilot.md").into()),
+        "prompts/session-supervisor.md" => {
+            Ok(include_str!("../../../prompts/session-supervisor.md").into())
+        }
+        _ => Err(format!("cannot read agent prompt file: {path}")),
     }
 }
 

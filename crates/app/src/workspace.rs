@@ -1,5 +1,8 @@
 use dnd_assistant_core::WorkspaceDocument;
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_DOCUMENTS: usize = 2_000;
@@ -14,14 +17,25 @@ pub struct Workspace {
 impl Workspace {
     pub fn load(paths: &[String]) -> Self {
         let mut workspace = Self::default();
+        let paths = if paths.is_empty() {
+            vec![std::env::current_dir().unwrap_or_else(|error| {
+                eprintln!("cannot determine current workspace directory: {error}");
+                Path::new(".").to_path_buf()
+            })]
+        } else {
+            paths.iter().map(PathBuf::from).collect()
+        };
         for configured in paths {
-            let path = Path::new(configured);
+            let path = configured.as_path();
             if path.is_dir() {
                 workspace.collect_directory(path);
             } else if path.is_file() {
                 workspace.read_file(path);
             } else {
-                eprintln!("workspace path does not exist; skipping: {configured}");
+                eprintln!(
+                    "workspace path does not exist; skipping: {}",
+                    configured.display()
+                );
             }
         }
         workspace

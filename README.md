@@ -63,6 +63,11 @@ the legacy global campaign context; it can then use only its explicit
 agent needs a stable slice of the workspace; otherwise the recent transcript
 is used to select relevant documents. The workspace index also exposes bounded
 local `list`, `read`, and `search` operations for the future tool-calling path.
+When `workspace_paths` is empty, the process current directory is used as the
+workspace root. This is the normal campaign workflow: change into the campaign
+repository, then start the assistant. Likewise, an empty `write_paths` for the
+session editor means that same current directory, while still requiring
+`--apply` before any campaign files change.
 Replace the built-in handlers with model-backed handlers later while retaining
 the same context contract. Agent jobs are queued independently of capture and
 model calls have a bounded timeout. It also starts a localhost UI at
