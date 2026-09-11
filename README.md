@@ -47,7 +47,11 @@ outputs default to a per-session directory beneath
 `$XDG_DATA_HOME/dnd-assistant/sessions`, or
 `~/.local/share/dnd-assistant/sessions`.
 Each enabled agent receives the current segment and a rolling 20-segment
-window, plus the configured campaign Markdown contents. The built-in agents
+window, plus the configured campaign Markdown contents. Custom model agents
+can set an inline `instruction`, a longer `prompt_file`, and explicit
+`workspace_paths` containing files or directories of Markdown documents. Each
+agent receives only its own selected workspace documents, which are read-only
+and include their source paths in the serialized context. The built-in agents
 write a JSONL recorder, a running Markdown summary, and GM next-step options.
 Each agent can set an optional `instruction` and `run_every_segments` cadence;
 the latter is useful for agents that should inspect the rolling context every
@@ -70,6 +74,27 @@ with `"kind": "llm"`. The endpoint uses the OpenAI-compatible
 Bearer token; leave it out for a local endpoint. Network model agents are
 disabled unless explicitly enabled, and their failures do not stop capture or
 the other agents.
+
+For a custom model agent, add an entry like:
+
+```json
+{
+  "id": "continuity-checker",
+  "kind": "llm",
+  "enabled": true,
+  "output": "continuity-checker.md",
+  "prompt_file": "prompts/continuity-checker.md",
+  "workspace_paths": [
+    "/home/toby/src/family-dnd/campaign/CANON.md",
+    "/home/toby/src/family-dnd/plot/OPEN_THREADS.md"
+  ],
+  "run_every_segments": 6
+}
+```
+
+Agents currently write suggestions and proposed notes to their configured
+session output only. They do not mutate campaign files. A future update
+protocol should make campaign-note changes explicit and reviewable.
 
 To use the family campaign context, change `campaign_context` in a private copy
 of `agents.example.json` to:

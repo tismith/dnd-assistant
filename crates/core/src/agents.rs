@@ -18,6 +18,13 @@ pub struct AgentConfig {
     pub output: String,
     #[serde(default)]
     pub instruction: Option<String>,
+    /// Optional path to a longer system prompt. Relative paths are resolved
+    /// from the process working directory by the application.
+    #[serde(default)]
+    pub prompt_file: Option<String>,
+    /// Files or directories this agent is explicitly allowed to read.
+    #[serde(default)]
+    pub workspace_paths: Vec<String>,
     #[serde(default = "default_run_every_segments")]
     pub run_every_segments: usize,
 }
@@ -33,6 +40,15 @@ pub struct TranscriptContext {
     pub recent: Vec<TranscriptSegment>,
     pub session_state: Option<SessionState>,
     pub campaign_context: Vec<String>,
+    /// Agent-specific workspace documents loaded by the application.
+    #[serde(default)]
+    pub workspace_context: Vec<WorkspaceDocument>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceDocument {
+    pub path: String,
+    pub content: String,
 }
 
 /// Provider-neutral input for a configured agent. A future LLM runner can
@@ -204,6 +220,7 @@ mod tests {
             ],
             session_state: None,
             campaign_context: vec!["The altar is connected to the Ember Gem".into()],
+            workspace_context: vec![],
         };
         let summary = run_builtin_agent(
             &AgentConfig {
@@ -212,6 +229,8 @@ mod tests {
                 enabled: true,
                 output: "summary.md".into(),
                 instruction: Some("Keep attention on unresolved player questions.".into()),
+                prompt_file: None,
+                workspace_paths: vec![],
                 run_every_segments: 1,
             },
             &context,
@@ -223,6 +242,8 @@ mod tests {
                 enabled: true,
                 output: "next.md".into(),
                 instruction: None,
+                prompt_file: None,
+                workspace_paths: vec![],
                 run_every_segments: 1,
             },
             &context,
@@ -241,6 +262,8 @@ mod tests {
             enabled: true,
             output: "summary.md".into(),
             instruction: None,
+            prompt_file: None,
+            workspace_paths: vec![],
             run_every_segments: 3,
         };
         let context = TranscriptContext {
@@ -249,6 +272,7 @@ mod tests {
             recent: vec![segment("1", "We wait")],
             session_state: None,
             campaign_context: vec![],
+            workspace_context: vec![],
         };
         assert!(run_enabled_agents_at(&[config.clone()], &context, 1).is_empty());
         assert_eq!(run_enabled_agents_at(&[config], &context, 3).len(), 1);
@@ -261,6 +285,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(config.instruction, None);
+        assert!(config.workspace_paths.is_empty());
         assert_eq!(config.run_every_segments, 1);
     }
 }

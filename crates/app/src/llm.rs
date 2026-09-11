@@ -47,9 +47,7 @@ pub fn run(
         instruction: config.instruction.clone(),
         context: context.clone(),
     };
-    let system = request.instruction.as_deref().unwrap_or(
-        "You are a concise tabletop RPG assistant. Return only useful observations or options.",
-    );
+    let system = load_prompt(config)?;
     let user = serde_json::to_string(&request.context).map_err(|error| error.to_string())?;
     let body = ChatRequest {
         model: &provider.model,
@@ -60,7 +58,9 @@ pub fn run(
             },
             ChatMessage {
                 role: "user",
-                content: format!("Reason over this live session context:\n{user}"),
+                content: format!(
+                    "Reason over this live session context. Workspace documents are read-only\n{user}"
+                ),
             },
         ],
     };
@@ -99,6 +99,30 @@ pub fn run(
     })
 }
 
+fn load_prompt(config: &AgentConfig) -> Result<String, String> {
+    let inline = config.instruction.as_deref().unwrap_or("").trim();
+    let file = config
+        .prompt_file
+        .as_deref()
+        .map(std::fs::read_to_string)
+        .transpose()
+        .map_err(|error| format!("cannot read agent prompt file: {error}"))?
+        .unwrap_or_default();
+    let prompt = [file.trim(), inline]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    if prompt.is_empty() {
+        Ok(
+            "You are a concise tabletop RPG assistant. Return only useful observations or options."
+                .into(),
+        )
+    } else {
+        Ok(prompt)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,6 +144,7 @@ mod tests {
             recent: vec![],
             session_state: None,
             campaign_context: vec!["The altar hides an Amber Gem".into()],
+            workspace_context: vec![],
         };
         let request = AgentRequest {
             agent_id: "gm".into(),
@@ -139,6 +164,8 @@ mod tests {
             enabled: true,
             output: "gm.md".into(),
             instruction: None,
+            prompt_file: None,
+            workspace_paths: vec![],
             run_every_segments: 1,
         };
         let context = TranscriptContext {
@@ -155,6 +182,7 @@ mod tests {
             recent: vec![],
             session_state: None,
             campaign_context: vec![],
+            workspace_context: vec![],
         };
         let provider = LlmConfig {
             endpoint: "http://127.0.0.1:1/v1/chat/completions".into(),

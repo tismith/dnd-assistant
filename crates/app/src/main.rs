@@ -623,6 +623,7 @@ fn process_segment(
         recent: recent_window,
         session_state: Some(SessionState::default()),
         campaign_context: campaign_context.to_vec(),
+        workspace_context: vec![],
     };
     let job = agent_runtime::AgentJob {
         configs: config.agents.clone(),
@@ -702,6 +703,8 @@ mod tests {
             enabled: true,
             output: "../outside.jsonl".into(),
             instruction: None,
+            prompt_file: None,
+            workspace_paths: vec![],
             run_every_segments: 1,
         };
         let output = AgentOutput {
@@ -721,6 +724,8 @@ mod tests {
             enabled: true,
             output: "events.jsonl".into(),
             instruction: None,
+            prompt_file: None,
+            workspace_paths: vec![],
             run_every_segments: 1,
         };
         let output = AgentOutput {
