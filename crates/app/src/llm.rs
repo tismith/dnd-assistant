@@ -1,4 +1,6 @@
-use dnd_assistant_core::{AgentConfig, AgentKind, AgentOutput, AgentRequest, TranscriptContext};
+use dnd_assistant_core::{
+    AgentConfig, AgentKind, AgentOutput, AgentRequest, CampaignUpdatePlan, TranscriptContext,
+};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -99,6 +101,69 @@ pub fn run(
     })
 }
 
+pub fn run_session_editor(
+    provider: &LlmConfig,
+    config: &AgentConfig,
+    context: &TranscriptContext,
+) -> Result<CampaignUpdatePlan, String> {
+    let system = load_prompt(config)?;
+    let context = serde_json::to_string(context).map_err(|error| error.to_string())?;
+    let user = format!(
+        "Review this complete session and campaign workspace. Return only valid JSON matching this schema: {{\"summary\": string, \"updates\": [{{\"path\": string, \"reason\": string, \"evidence\": [string], \"find\": string|null, \"replace\": string}}]}}.\nDo not invent facts. Use exact existing text in find for edits.\n{context}"
+    );
+    let content = complete(provider, &system, &user)?;
+    let json = content
+        .trim()
+        .strip_prefix("```")
+        .and_then(|text| text.strip_suffix("```"))
+        .map(|text| text.trim_start_matches("json").trim())
+        .unwrap_or(content.trim());
+    serde_json::from_str(json).map_err(|error| format!("invalid session update plan: {error}"))
+}
+
+fn complete(provider: &LlmConfig, system: &str, user: &str) -> Result<String, String> {
+    let body = ChatRequest {
+        model: &provider.model,
+        messages: [
+            ChatMessage {
+                role: "system",
+                content: system.to_owned(),
+            },
+            ChatMessage {
+                role: "user",
+                content: user.to_owned(),
+            },
+        ],
+    };
+    let mut call = ureq::post(&provider.endpoint)
+        .config()
+        .timeout_global(Some(Duration::from_secs(60)))
+        .build()
+        .header("Content-Type", "application/json");
+    if let Some(variable) = provider.api_key_env.as_deref() {
+        let key = std::env::var(variable)
+            .map_err(|_| format!("model API key environment variable {variable} is unset"))?;
+        call = call.header("Authorization", &format!("Bearer {key}"));
+    }
+    let payload = serde_json::to_vec(&body).map_err(|error| error.to_string())?;
+    let mut response = call
+        .send(payload)
+        .map_err(|error| format!("model request failed: {error}"))?;
+    let response_body = response
+        .body_mut()
+        .read_to_string()
+        .map_err(|error| format!("invalid model response body: {error}"))?;
+    let response: ChatResponse = serde_json::from_str(&response_body)
+        .map_err(|error| format!("invalid model response: {error}"))?;
+    response
+        .choices
+        .into_iter()
+        .next()
+        .map(|choice| choice.message.content)
+        .filter(|content| !content.trim().is_empty())
+        .ok_or_else(|| "model response contained no choices".to_owned())
+}
+
 fn load_prompt(config: &AgentConfig) -> Result<String, String> {
     let inline = config.instruction.as_deref().unwrap_or("").trim();
     let file = config
@@ -166,6 +231,7 @@ mod tests {
             instruction: None,
             prompt_file: None,
             workspace_paths: vec![],
+            write_paths: vec![],
             run_every_segments: 1,
         };
         let context = TranscriptContext {

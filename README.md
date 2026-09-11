@@ -21,6 +21,7 @@ cargo run -p dnd-assistant -- live /path/to/ggml-base.en.bin agents.example.json
 cargo run -p dnd-assistant -- reconcile-demo
 cargo run -p dnd-assistant -- record
 cargo run -p dnd-assistant -- transcribe-wav /path/to/model.bin /path/to/recording.wav agents.example.json
+cargo run -p dnd-assistant -- session-end agents.example.json /path/to/session
 cargo run -p dnd-assistant -- replay agents.example.json fixtures/transcript.jsonl "${XDG_DATA_HOME:-$HOME/.local/share}/dnd-assistant/sessions/replay"
 cat fixtures/transcript.jsonl | cargo run -p dnd-assistant -- stream agents.example.json
 ```
@@ -92,9 +93,22 @@ For a custom model agent, add an entry like:
 }
 ```
 
-Agents currently write suggestions and proposed notes to their configured
-session output only. They do not mutate campaign files. A future update
-protocol should make campaign-note changes explicit and reviewable.
+Live agents write suggestions and proposed notes to their configured session
+output only. They do not mutate campaign files. The optional session editor
+below is the explicit, reviewable campaign-update path.
+
+The optional `session_editor` agent is run explicitly after a session:
+
+```sh
+cargo run -p dnd-assistant -- session-end agents.json /path/to/session
+cargo run -p dnd-assistant -- session-end agents.json /path/to/session --apply
+```
+
+It reads the session transcript, all session agent outputs, and its configured
+workspace paths. It writes a high-level summary and structured update plan into
+the session directory. `--apply` validates every exact text replacement against
+the configured `write_paths`, creates backups under the session directory, and
+then applies the coordinated campaign edits.
 
 To use the family campaign context, change `campaign_context` in a private copy
 of `agents.example.json` to:

@@ -69,7 +69,9 @@ impl Drop for AgentDispatcher {
 
 pub fn run_job(job: AgentJob, ui_state: Option<&ui::SharedLiveState>) {
     for agent in job.configs.iter().filter(|agent| {
-        agent.enabled && job.sequence.is_multiple_of(agent.run_every_segments.max(1))
+        agent.enabled
+            && agent.kind != AgentKind::SessionEditor
+            && job.sequence.is_multiple_of(agent.run_every_segments.max(1))
     }) {
         let context = context_for_agent(&job.context, agent);
         if let Err(error) = job.session_log.append(&Event::AgentRunRequested {
@@ -118,7 +120,7 @@ fn context_for_agent(context: &TranscriptContext, agent: &AgentConfig) -> Transc
     scoped
 }
 
-fn load_workspace_documents(paths: &[String]) -> Vec<WorkspaceDocument> {
+pub fn load_workspace_documents(paths: &[String]) -> Vec<WorkspaceDocument> {
     let mut documents = Vec::new();
     for configured in paths {
         let path = Path::new(configured);
@@ -195,6 +197,7 @@ mod tests {
                     instruction: Some("Keep this concise.".into()),
                     prompt_file: None,
                     workspace_paths: vec![],
+                    write_paths: vec![],
                     run_every_segments: 1,
                 }],
                 context: TranscriptContext {
@@ -272,6 +275,7 @@ mod tests {
             instruction: None,
             prompt_file: None,
             workspace_paths: vec![path.display().to_string()],
+            write_paths: vec![],
             run_every_segments: 1,
         };
         let scoped = context_for_agent(&context, &agent);

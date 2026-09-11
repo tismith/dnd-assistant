@@ -23,6 +23,10 @@ the architecture to solve later features before those risks are measured.
 - Keep commits narrow and coherent. Build, test, and document each increment.
 - Do not claim microphone, diarization, browser, runtime, or packaged behavior
   until it has been exercised on this machine or in a clearly named fixture.
+- The `session_editor` agent runs only through `session-end`. It may read its
+  configured workspace and may only update explicitly configured `write_paths`.
+  Validate all exact-text edits before applying them; keep campaign changes
+  reviewable and backed up in the session directory.
 
 ## Campaign context safety
 

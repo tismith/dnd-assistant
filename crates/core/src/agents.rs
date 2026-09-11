@@ -8,6 +8,7 @@ pub enum AgentKind {
     LiveSummary,
     NextSteps,
     Llm,
+    SessionEditor,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -25,6 +26,9 @@ pub struct AgentConfig {
     /// Files or directories this agent is explicitly allowed to read.
     #[serde(default)]
     pub workspace_paths: Vec<String>,
+    /// Paths this agent may propose changes within during a session-end run.
+    #[serde(default)]
+    pub write_paths: Vec<String>,
     #[serde(default = "default_run_every_segments")]
     pub run_every_segments: usize,
 }
@@ -49,6 +53,24 @@ pub struct TranscriptContext {
 pub struct WorkspaceDocument {
     pub path: String,
     pub content: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CampaignUpdatePlan {
+    pub summary: String,
+    #[serde(default)]
+    pub updates: Vec<CampaignFileUpdate>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CampaignFileUpdate {
+    pub path: String,
+    pub reason: String,
+    #[serde(default)]
+    pub evidence: Vec<String>,
+    /// Exact existing text to replace. `null` means create or append.
+    pub find: Option<String>,
+    pub replace: String,
 }
 
 /// Provider-neutral input for a configured agent. A future LLM runner can
@@ -109,6 +131,10 @@ pub fn run_builtin_agent(config: &AgentConfig, context: &TranscriptContext) -> A
         AgentKind::Llm => (
             "Model agent".into(),
             "This agent requires a configured model provider.".into(),
+        ),
+        AgentKind::SessionEditor => (
+            "Session editor".into(),
+            "Run this agent with the session-end command.".into(),
         ),
     };
     AgentOutput {
@@ -231,6 +257,7 @@ mod tests {
                 instruction: Some("Keep attention on unresolved player questions.".into()),
                 prompt_file: None,
                 workspace_paths: vec![],
+                write_paths: vec![],
                 run_every_segments: 1,
             },
             &context,
@@ -244,6 +271,7 @@ mod tests {
                 instruction: None,
                 prompt_file: None,
                 workspace_paths: vec![],
+                write_paths: vec![],
                 run_every_segments: 1,
             },
             &context,
@@ -264,6 +292,7 @@ mod tests {
             instruction: None,
             prompt_file: None,
             workspace_paths: vec![],
+            write_paths: vec![],
             run_every_segments: 3,
         };
         let context = TranscriptContext {

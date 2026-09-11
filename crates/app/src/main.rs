@@ -2,8 +2,9 @@ use dnd_assistant_audio::{
     default_input_description, downmix_and_resample, rms, start_default_input,
 };
 use dnd_assistant_core::{
-    AgentConfig, AgentKind, Event, ReconciliationInput, SegmentStatus, SessionState,
-    SpeakerSegment, TranscriptContext, TranscriptSegment, attribute_speaker,
+    AgentConfig, AgentKind, CampaignUpdatePlan, Event, ReconciliationInput, SegmentStatus,
+    SessionState, SpeakerSegment, TranscriptContext, TranscriptSegment, WorkspaceDocument,
+    attribute_speaker,
 };
 use dnd_assistant_models::{default_model_cache_dir, ensure_model};
 use dnd_assistant_stt::WhisperTranscriber;
@@ -46,6 +47,11 @@ fn main() {
         Some("transcribe-wav") => {
             transcribe_wav(args.next(), args.next(), args.next(), args.next())
         }
+        Some("session-end") => session_end(
+            args.next(),
+            args.next(),
+            args.next().as_deref() == Some("--apply"),
+        ),
         Some("record") => record(
             args.next()
                 .map(PathBuf::from)
@@ -484,7 +490,7 @@ fn reconcile_demo() {
 
 fn usage() {
     println!(
-        "Usage: cargo run -p dnd-assistant -- <validate|audio-info|capture|live <model> <config.json> [output-dir]|record [path]|transcribe-wav <model> <recording.wav> <config.json> [output-dir]|reconcile-demo|replay <config.json> <transcript.jsonl> <output-dir>|stream <config.json> [output-dir]>"
+        "Usage: cargo run -p dnd-assistant -- <validate|audio-info|capture|live <model> <config.json> [output-dir]|record [path]|transcribe-wav <model> <recording.wav> <config.json> [output-dir]|session-end <config.json> <session-dir> [--apply]|reconcile-demo|replay <config.json> <transcript.jsonl> <output-dir>|stream <config.json> [output-dir]>"
     );
 }
 
@@ -678,7 +684,10 @@ fn write_agent_output(
                 .map_err(|error| error.to_string())?;
             writeln!(file, "{}", result.body).map_err(|error| error.to_string())?;
         }
-        AgentKind::LiveSummary | AgentKind::NextSteps | AgentKind::Llm => {
+        AgentKind::LiveSummary
+        | AgentKind::NextSteps
+        | AgentKind::Llm
+        | AgentKind::SessionEditor => {
             fs::write(path, format!("{}\n\n{}", result.title, result.body))
                 .map_err(|error| error.to_string())?;
         }
@@ -686,13 +695,150 @@ fn write_agent_output(
     Ok(())
 }
 
+fn session_end(config_path: Option<String>, session_dir: Option<String>, apply: bool) {
+    let (Some(config_path), Some(session_dir)) = (config_path, session_dir) else {
+        usage();
+        std::process::exit(2);
+    };
+    let config: AppConfig = read_json(&config_path);
+    let editor = config
+        .agents
+        .iter()
+        .find(|agent| agent.enabled && agent.kind == AgentKind::SessionEditor)
+        .unwrap_or_else(|| panic!("no enabled session_editor agent is configured"));
+    let provider = config
+        .llm
+        .as_ref()
+        .unwrap_or_else(|| panic!("session_editor requires an llm provider"));
+    let session_path = PathBuf::from(&session_dir);
+    let events = fs::read_to_string(session_path.join("events.jsonl"))
+        .unwrap_or_else(|error| panic!("cannot read session events: {error}"));
+    let mut segments = Vec::new();
+    for line in events.lines().filter(|line| !line.trim().is_empty()) {
+        let event: Event = serde_json::from_str(line)
+            .unwrap_or_else(|error| panic!("invalid session event: {error}"));
+        if let Event::TranscriptSegmentCreated { segment } = event {
+            segments.push(segment);
+        }
+    }
+    let current = segments
+        .last()
+        .cloned()
+        .unwrap_or_else(|| panic!("session contains no transcript segments"));
+    let mut workspace_context = agent_runtime::load_workspace_documents(&editor.workspace_paths);
+    if let Ok(entries) = fs::read_dir(&session_path) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file()
+                && path.file_name().and_then(|name| name.to_str()) != Some("events.jsonl")
+            {
+                if let Ok(content) = fs::read_to_string(&path) {
+                    workspace_context.push(WorkspaceDocument {
+                        path: path.display().to_string(),
+                        content,
+                    });
+                }
+            }
+        }
+    }
+    let context = TranscriptContext {
+        session_id: config
+            .session_id
+            .clone()
+            .unwrap_or_else(|| session_dir.clone()),
+        current,
+        recent: segments,
+        session_state: Some(SessionState::default()),
+        campaign_context: load_campaign_context(&config),
+        workspace_context,
+    };
+    let plan = llm::run_session_editor(provider, editor, &context)
+        .unwrap_or_else(|error| panic!("session editor failed: {error}"));
+    let plan_path = session_path.join("campaign-update-plan.json");
+    fs::write(&plan_path, serde_json::to_string_pretty(&plan).unwrap())
+        .unwrap_or_else(|error| panic!("cannot write {}: {error}", plan_path.display()));
+    let summary_path = session_path.join("campaign-update-summary.md");
+    fs::write(&summary_path, &plan.summary)
+        .unwrap_or_else(|error| panic!("cannot write {}: {error}", summary_path.display()));
+    println!("Campaign update summary: {}", summary_path.display());
+    println!("Campaign update plan: {}", plan_path.display());
+    if apply {
+        apply_campaign_updates(&plan, &editor.write_paths, &session_path);
+        println!("Campaign updates applied.");
+    } else {
+        println!("Review the plan, then rerun with --apply to update configured campaign paths.");
+    }
+}
+
+fn apply_campaign_updates(plan: &CampaignUpdatePlan, write_paths: &[String], session_dir: &Path) {
+    if write_paths.is_empty() && !plan.updates.is_empty() {
+        panic!("session_editor has updates but no configured write_paths");
+    }
+    let mut changes = Vec::new();
+    for update in &plan.updates {
+        let path = resolve_allowed_update_path(&update.path, write_paths)
+            .unwrap_or_else(|| panic!("update path is outside write_paths: {}", update.path));
+        let existing = fs::read_to_string(&path).unwrap_or_default();
+        let replacement = match &update.find {
+            Some(find) => {
+                let matches = existing.matches(find).count();
+                if matches != 1 {
+                    panic!(
+                        "update for {} expected one matching block, found {matches}",
+                        path.display()
+                    );
+                }
+                existing.replacen(find, &update.replace, 1)
+            }
+            None if path.exists() => format!("{}\n{}\n", existing.trim_end(), update.replace),
+            None => update.replace.clone(),
+        };
+        changes.push((path, existing, replacement));
+    }
+    for (path, existing, replacement) in changes {
+        if path.exists() {
+            let backup = session_dir
+                .join("campaign-backups")
+                .join(path.file_name().unwrap_or_default());
+            fs::create_dir_all(backup.parent().unwrap()).unwrap();
+            fs::write(&backup, existing).unwrap();
+        }
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(&path, replacement)
+            .unwrap_or_else(|error| panic!("cannot apply update to {}: {error}", path.display()));
+    }
+}
+
+fn resolve_allowed_update_path(update: &str, roots: &[String]) -> Option<PathBuf> {
+    let update_path = Path::new(update);
+    if update_path
+        .components()
+        .any(|component| component == Component::ParentDir)
+    {
+        return None;
+    }
+    roots.iter().find_map(|root| {
+        let root = PathBuf::from(root);
+        let candidate = if update_path.is_absolute() {
+            update_path.to_owned()
+        } else {
+            root.join(update_path)
+        };
+        candidate.starts_with(&root).then_some(candidate)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        AppConfig, read_pcm16_wav, resolve_output_dir, sanitize_session_id, wav_header,
-        write_agent_output,
+        AppConfig, apply_campaign_updates, read_pcm16_wav, resolve_output_dir, sanitize_session_id,
+        wav_header, write_agent_output,
     };
-    use dnd_assistant_core::{AgentConfig, AgentKind, AgentOutput};
+    use dnd_assistant_core::{
+        AgentConfig, AgentKind, AgentOutput, CampaignFileUpdate, CampaignUpdatePlan,
+    };
     use std::path::Path;
 
     #[test]
@@ -705,6 +851,7 @@ mod tests {
             instruction: None,
             prompt_file: None,
             workspace_paths: vec![],
+            write_paths: vec![],
             run_every_segments: 1,
         };
         let output = AgentOutput {
@@ -726,6 +873,7 @@ mod tests {
             instruction: None,
             prompt_file: None,
             workspace_paths: vec![],
+            write_paths: vec![],
             run_every_segments: 1,
         };
         let output = AgentOutput {
@@ -782,5 +930,37 @@ mod tests {
             resolve_output_dir(None, &config)
                 .ends_with("dnd-assistant/sessions/Friday---session-1")
         );
+    }
+
+    #[test]
+    fn campaign_update_requires_exact_matching_text() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("dnd-campaign-update-{nonce}"));
+        let campaign = root.join("campaign");
+        let session = root.join("session");
+        std::fs::create_dir_all(&campaign).unwrap();
+        std::fs::create_dir_all(&session).unwrap();
+        let target = campaign.join("canon.md");
+        std::fs::write(&target, "The party found the bell.").unwrap();
+        let plan = CampaignUpdatePlan {
+            summary: "The bell was found.".into(),
+            updates: vec![CampaignFileUpdate {
+                path: target.display().to_string(),
+                reason: "Established in the transcript.".into(),
+                evidence: vec!["stt-1".into()],
+                find: Some("The party found the bell.".into()),
+                replace: "The party found the Wind Bell.".into(),
+            }],
+        };
+        apply_campaign_updates(&plan, &[campaign.display().to_string()], &session);
+        assert_eq!(
+            std::fs::read_to_string(&target).unwrap(),
+            "The party found the Wind Bell."
+        );
+        assert!(session.join("campaign-backups/canon.md").exists());
+        let _ = std::fs::remove_dir_all(root);
     }
 }
