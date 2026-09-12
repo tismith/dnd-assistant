@@ -17,7 +17,9 @@ cargo test
 cargo run -p dnd-assistant -- validate
 cargo run -p dnd-assistant -- audio-info
 cargo run -p dnd-assistant -- capture
-cargo run -p dnd-assistant -- live /path/to/ggml-base.en.bin agents.example.json
+# From a campaign workspace: uses discovered config, or built-in defaults.
+cd /path/to/campaign
+cargo run --manifest-path /home/toby/src/dnd-assistant/Cargo.toml -p dnd-assistant -- live
 cargo run -p dnd-assistant -- reconcile-demo
 cargo run -p dnd-assistant -- record
 cargo run -p dnd-assistant -- transcribe-wav /path/to/model.bin /path/to/recording.wav agents.example.json
@@ -68,6 +70,13 @@ workspace root. This is the normal campaign workflow: change into the campaign
 repository, then start the assistant. Likewise, an empty `write_paths` for the
 session editor means that same current directory, while still requiring
 `--apply` before any campaign files change.
+When `live` is started without a model, it downloads the default
+`ggml-tiny.en.bin` model on first use and caches it in the XDG cache directory.
+When it is started without a config, it checks
+`$XDG_CONFIG_HOME/dnd-assistant/agents.json` (or `~/.config/dnd-assistant/agents.json`)
+and then `agents.json` in the current directory. If neither exists, the built-in
+local agents are used. The application prints the UI URL, normally
+`http://127.0.0.1:8787/`, when the live server starts.
 Replace the built-in handlers with model-backed handlers later while retaining
 the same context contract. Agent jobs are queued independently of capture and
 model calls have a bounded timeout. It also starts a localhost UI at
@@ -148,10 +157,13 @@ application remains responsible for lifecycle and future event ingestion.
 
 ## Campaign context
 
-Use `config.example.toml` as the starting point for pointing at
-`/home/toby/src/family-dnd`. That repository is GM-facing, so it is treated as
-private until a reviewed public allowlist exists. The assistant only reads it;
-it does not write campaign notes.
+Run the assistant from the campaign repository to make it the canonical
+workspace; no campaign path configuration is required. For custom agents,
+copy `agents.example.json` to the XDG config location or to `agents.json` in
+the campaign directory and edit the agent definitions. The reference campaign
+repository is GM-facing, so it is treated as private until a reviewed public
+allowlist exists. The live assistant only reads it; it does not write campaign
+notes.
 
 ## Design documents
 

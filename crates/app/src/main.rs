@@ -23,6 +23,10 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+const DEFAULT_MODEL_URL: &str =
+    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin";
+const DEFAULT_MODEL_FILENAME: &str = "ggml-tiny.en.bin";
+
 #[derive(Debug, Clone, serde::Deserialize)]
 struct AppConfig {
     #[serde(default)]
@@ -107,30 +111,11 @@ fn capture() {
 }
 
 fn live(model_path: Option<String>, config_path: Option<String>, output_dir: Option<String>) {
-    let (Some(model_path), Some(config_path)) = (model_path, config_path) else {
-        usage();
-        std::process::exit(2);
-    };
-    let mut config: AppConfig = read_json(&config_path);
+    let mut config = load_app_config(config_path.as_deref());
     let campaign_context = load_campaign_context(&config);
     let output_dir = resolve_output_dir(output_dir, &config);
     set_default_session_id(&mut config, &output_dir);
-    let model_path = if model_path.starts_with("http://") || model_path.starts_with("https://") {
-        let filename = model_path
-            .rsplit('/')
-            .next()
-            .filter(|name| !name.is_empty())
-            .unwrap_or("model.bin");
-        let destination = default_model_cache_dir().join(filename);
-        ensure_model(&model_path, &destination, config.model_sha256.as_deref()).unwrap_or_else(
-            |error| {
-                eprintln!("model download unavailable: {error}");
-                std::process::exit(1);
-            },
-        )
-    } else {
-        PathBuf::from(&model_path)
-    };
+    let model_path = resolve_model_path(model_path, &config);
     let transcriber = WhisperTranscriber::load(&model_path).unwrap_or_else(|error| {
         eprintln!("transcription unavailable: {error}");
         std::process::exit(1);
@@ -530,7 +515,7 @@ fn reconcile_demo() {
 
 fn usage() {
     println!(
-        "Usage: cargo run -p dnd-assistant -- <validate|audio-info|capture|live <model> <config.json> [output-dir]|record [path]|transcribe-wav <model> <recording.wav> <config.json> [output-dir]|session-end <config.json> <session-dir> [--apply]|reconcile-demo|replay <config.json> <transcript.jsonl> <output-dir>|stream <config.json> [output-dir]>"
+        "Usage: cargo run -p dnd-assistant -- <validate|audio-info|capture|live [model] [config.json] [output-dir]|record [path]|transcribe-wav <model> <recording.wav> <config.json> [output-dir]|session-end <config.json> <session-dir> [--apply]|reconcile-demo|replay <config.json> <transcript.jsonl> <output-dir>|stream <config.json> [output-dir]>"
     );
 }
 
@@ -694,6 +679,105 @@ fn read_json<T: serde::de::DeserializeOwned>(path: &str) -> T {
         fs::read_to_string(path).unwrap_or_else(|error| panic!("cannot read {path}: {error}"));
     serde_json::from_str(&contents)
         .unwrap_or_else(|error| panic!("invalid JSON in {path}: {error}"))
+}
+
+fn default_config_path() -> PathBuf {
+    let base = env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+        .unwrap_or_else(|| PathBuf::from(".config"));
+    base.join("dnd-assistant").join("agents.json")
+}
+
+fn default_app_config() -> AppConfig {
+    AppConfig {
+        session_id: None,
+        agents: vec![
+            AgentConfig {
+                id: "recorder".into(),
+                kind: AgentKind::Recorder,
+                enabled: true,
+                output: "transcript.jsonl".into(),
+                instruction: None,
+                prompt_file: None,
+                workspace_paths: vec![],
+                workspace_query: None,
+                write_paths: vec![],
+                include_campaign_context: true,
+                run_every_segments: 1,
+            },
+            AgentConfig {
+                id: "summary".into(),
+                kind: AgentKind::LiveSummary,
+                enabled: true,
+                output: "summary.md".into(),
+                instruction: Some("Keep unresolved player questions visible.".into()),
+                prompt_file: None,
+                workspace_paths: vec![],
+                workspace_query: None,
+                write_paths: vec![],
+                include_campaign_context: true,
+                run_every_segments: 1,
+            },
+            AgentConfig {
+                id: "gm-next-steps".into(),
+                kind: AgentKind::NextSteps,
+                enabled: true,
+                output: "gm-next-steps.md".into(),
+                instruction: Some("Offer choices without prescribing a single action.".into()),
+                prompt_file: None,
+                workspace_paths: vec![],
+                workspace_query: None,
+                write_paths: vec![],
+                include_campaign_context: true,
+                run_every_segments: 3,
+            },
+        ],
+        campaign_context: vec![],
+        model_sha256: None,
+        llm: None,
+    }
+}
+
+fn load_app_config(config_path: Option<&str>) -> AppConfig {
+    if let Some(path) = config_path {
+        println!("Using agent config: {path}");
+        return read_json(path);
+    }
+    let xdg_path = default_config_path();
+    for path in [xdg_path, PathBuf::from("agents.json")] {
+        if path.is_file() {
+            println!("Using agent config: {}", path.display());
+            return read_json(&path.display().to_string());
+        }
+    }
+    println!(
+        "Using built-in agent defaults (customize {})",
+        default_config_path().display()
+    );
+    default_app_config()
+}
+
+fn resolve_model_path(model_path: Option<String>, config: &AppConfig) -> PathBuf {
+    let model = model_path.unwrap_or_else(|| {
+        println!("Using default Whisper model: {DEFAULT_MODEL_FILENAME}");
+        DEFAULT_MODEL_URL.into()
+    });
+    if model.starts_with("http://") || model.starts_with("https://") {
+        let filename = model
+            .rsplit('/')
+            .next()
+            .filter(|name| !name.is_empty())
+            .unwrap_or(DEFAULT_MODEL_FILENAME);
+        let destination = default_model_cache_dir().join(filename);
+        ensure_model(&model, &destination, config.model_sha256.as_deref()).unwrap_or_else(|error| {
+            eprintln!("model download unavailable: {error}");
+            std::process::exit(1);
+        })
+    } else {
+        PathBuf::from(model)
+    }
 }
 
 fn write_agent_output(
@@ -930,8 +1014,8 @@ fn resolve_allowed_update_path(update: &str, roots: &[String]) -> Option<PathBuf
 #[cfg(test)]
 mod tests {
     use super::{
-        AppConfig, apply_campaign_updates, read_pcm16_wav, resolve_output_dir, sanitize_session_id,
-        wav_header, write_agent_output,
+        AppConfig, DEFAULT_MODEL_FILENAME, apply_campaign_updates, default_app_config,
+        read_pcm16_wav, resolve_output_dir, sanitize_session_id, wav_header, write_agent_output,
     };
     use dnd_assistant_core::{
         AgentConfig, AgentKind, AgentOutput, CampaignFileUpdate, CampaignUpdatePlan,
@@ -1030,6 +1114,26 @@ mod tests {
         assert!(
             resolve_output_dir(None, &config)
                 .ends_with("dnd-assistant/sessions/Friday---session-1")
+        );
+    }
+
+    #[test]
+    fn built_in_defaults_are_local_and_workspace_relative() {
+        let config = default_app_config();
+        assert_eq!(DEFAULT_MODEL_FILENAME, "ggml-tiny.en.bin");
+        assert!(config.llm.is_none());
+        assert_eq!(config.agents.len(), 3);
+        assert!(
+            config
+                .agents
+                .iter()
+                .all(|agent| agent.workspace_paths.is_empty())
+        );
+        assert!(
+            config
+                .agents
+                .iter()
+                .all(|agent| agent.write_paths.is_empty())
         );
     }
 
