@@ -160,7 +160,15 @@ fn live(model_path: Option<String>, config_path: Option<String>, output_dir: Opt
             .and_then(|value| value.parse::<f32>().ok())
             .unwrap_or(0.005);
         for (window_start_ms, audio) in window_receiver {
-            if rms(&audio) < silence_rms {
+            let level = rms(&audio);
+            eprintln!(
+                "audio window {}-{} ms: RMS {:.5}",
+                window_start_ms,
+                window_start_ms + 5_000,
+                level
+            );
+            if level < silence_rms {
+                eprintln!("audio window below silence threshold ({silence_rms:.5}); skipped");
                 continue;
             }
             match transcriber.transcribe_window(&audio) {
