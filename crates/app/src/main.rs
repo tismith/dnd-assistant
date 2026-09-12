@@ -24,8 +24,8 @@ use std::{
 };
 
 const DEFAULT_MODEL_URL: &str =
-    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin";
-const DEFAULT_MODEL_FILENAME: &str = "ggml-tiny.en.bin";
+    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin";
+const DEFAULT_MODEL_FILENAME: &str = "ggml-base.en.bin";
 
 #[derive(Debug, Clone, serde::Deserialize)]
 struct AppConfig {
@@ -1157,7 +1157,7 @@ mod tests {
     #[test]
     fn built_in_defaults_are_local_and_workspace_relative() {
         let config = default_app_config();
-        assert_eq!(DEFAULT_MODEL_FILENAME, "ggml-tiny.en.bin");
+        assert_eq!(DEFAULT_MODEL_FILENAME, "ggml-base.en.bin");
         assert_eq!(config.llm.as_ref().unwrap().endpoint, "codex://local");
         assert_eq!(config.agents.len(), 4);
         assert!(

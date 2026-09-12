@@ -71,7 +71,7 @@ repository, then start the assistant. Likewise, an empty `write_paths` for the
 session editor means that same current directory, while still requiring
 `--apply` before any campaign files change.
 When `live` is started without a model, it downloads the default
-`ggml-tiny.en.bin` model on first use and caches it in the XDG cache directory.
+`ggml-base.en.bin` model on first use and caches it in the XDG cache directory.
 When it is started without a config, it checks
 `$XDG_CONFIG_HOME/dnd-assistant/agents.json` (or `~/.config/dnd-assistant/agents.json`)
 and then `agents.json` in the current directory. If neither exists, the built-in
