@@ -741,10 +741,29 @@ fn default_app_config() -> AppConfig {
                 include_campaign_context: true,
                 run_every_segments: 3,
             },
+            AgentConfig {
+                id: "gm-copilot".into(),
+                kind: AgentKind::Llm,
+                enabled: true,
+                output: "gm-copilot.md".into(),
+                instruction: None,
+                prompt_file: Some("prompts/gm-copilot.md".into()),
+                workspace_paths: vec![],
+                workspace_query: Some(
+                    "campaign canon open threads NPC lore locations quests factions".into(),
+                ),
+                write_paths: vec![],
+                include_campaign_context: false,
+                run_every_segments: 6,
+            },
         ],
         campaign_context: vec![],
         model_sha256: None,
-        llm: None,
+        llm: Some(llm::LlmConfig {
+            endpoint: "codex://local".into(),
+            model: "default".into(),
+            api_key_env: None,
+        }),
     }
 }
 
@@ -1129,8 +1148,8 @@ mod tests {
     fn built_in_defaults_are_local_and_workspace_relative() {
         let config = default_app_config();
         assert_eq!(DEFAULT_MODEL_FILENAME, "ggml-tiny.en.bin");
-        assert!(config.llm.is_none());
-        assert_eq!(config.agents.len(), 3);
+        assert_eq!(config.llm.as_ref().unwrap().endpoint, "codex://local");
+        assert_eq!(config.agents.len(), 4);
         assert!(
             config
                 .agents
