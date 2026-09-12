@@ -217,14 +217,13 @@ const INDEX_HTML: &str = r##"<!doctype html>
     section { min-width: 0; overflow: hidden; border: 1px solid rgba(174, 148, 211, .2); border-radius: .85rem; background: var(--panel); box-shadow: 0 1rem 3rem rgba(0, 0, 0, .18); }
     .section-heading { display: flex; align-items: baseline; justify-content: space-between; gap: .6rem; padding: 1rem 1.1rem .8rem; border-bottom: 1px solid rgba(174, 148, 211, .14); }
     .section-heading h2 { margin: 0; } .section-hint { color: var(--muted); font-size: .72rem; }
-    #transcript { max-height: 68vh; overflow: auto; padding: .25rem 1.1rem 1rem; }
+    .pane-tabs { display: flex; flex-wrap: wrap; gap: .4rem; padding: .8rem 1.1rem 0; }
+    .pane-tab { padding: .35rem .6rem; border-radius: .45rem; font-size: .75rem; }
+    .pane-tab.active { border-color: var(--gold); color: #211823; background: linear-gradient(135deg, #edc477, #bf91db); }
+    .pane-content { max-height: 68vh; min-height: 22rem; overflow: auto; padding: 0 1.1rem 1rem; }
     .segment { padding: .75rem 0; border-bottom: 1px solid rgba(174, 148, 211, .1); }
     .segment:last-child { border-bottom: 0; } .segment-text { margin-top: .18rem; color: #f4eee7; }
     .time, .speaker, .status { color: var(--violet); font-size: .74rem; font-weight: 700; } .speaker { margin-left: .45rem; color: var(--gold); }
-    .agent-tabs { display: flex; flex-wrap: wrap; gap: .4rem; padding: .8rem 1.1rem 0; }
-    .agent-tab { padding: .35rem .6rem; border-radius: .45rem; font-size: .75rem; }
-    .agent-tab.active { border-color: var(--gold); color: #211823; background: linear-gradient(135deg, #edc477, #bf91db); }
-    #agents { max-height: 68vh; overflow: auto; padding: 0 1.1rem 1rem; }
     .agent { margin-top: .9rem; padding: .85rem .9rem; border: 1px solid rgba(174, 148, 211, .16); border-radius: .65rem; background: rgba(19, 16, 27, .45); white-space: pre-wrap; }
     .agent small { color: var(--muted); font-weight: 500; }
     .empty-state { display: grid; place-items: center; min-height: 10rem; padding: 2rem; color: var(--muted); text-align: center; }
@@ -237,35 +236,39 @@ const INDEX_HTML: &str = r##"<!doctype html>
   <header><div class="brand"><div class="brand-mark">✦</div><div><p class="eyebrow">D&amp;D Assistant</p><h1>Live session cockpit</h1><p class="subtitle">Listen closely. Keep the story moving.</p></div></div><span id="status" class="status-pill">starting</span></header>
   <div class="toolbar"><nav class="controls"><button id="start" class="primary" onclick="action('start')">▶ Start session</button><button id="pause" onclick="action('pause')">Ⅱ Pause</button><button id="stop" class="danger" onclick="action('stop')">■ Stop session</button></nav></div>
   <div class="metrics"><div class="metric"><span class="metric-label">Transcript segments</span><span id="segment-count" class="metric-value">0</span></div><div class="metric"><span class="metric-label">Latest speaker</span><span id="latest-speaker" class="metric-value">—</span></div><div class="metric"><span class="metric-label">Agent signals</span><span id="agent-count" class="metric-value">0</span></div></div>
-  <main><section><div class="section-heading"><h2>Transcript</h2><span class="section-hint">rolling live record</span></div><div id="transcript"><div class="empty-state"><div><span class="empty-icon">◌</span>Waiting for the first spoken scene…</div></div></div></section>
-    <section><div class="section-heading"><h2>Agent room</h2><span class="section-hint">latest observations</span></div><div id="agent-tabs" class="agent-tabs"></div><div id="agents" class="empty-state"><div><span class="empty-icon">✧</span>Agents are listening…</div></div></section></main>
+  <main><section><div class="section-heading"><h2 id="left-title">Session guide</h2><span class="section-hint">planning workspace</span></div><div id="left-tabs" class="pane-tabs"></div><div id="left-content" class="pane-content"><div class="empty-state"><div><span class="empty-icon">✧</span>Agents are listening…</div></div></div></section>
+    <section><div class="section-heading"><h2 id="right-title">Transcript</h2><span class="section-hint">live record</span></div><div id="right-tabs" class="pane-tabs"></div><div id="right-content" class="pane-content"><div class="empty-state"><div><span class="empty-icon">◌</span>Waiting for the first spoken scene…</div></div></div></section></main>
   </div>
   <script>
     const esc = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     const time = ms => `${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}`;
     async function action(name) { await fetch(`/api/session/${name}`, { method: 'POST' }); await refresh(); }
-    let activeAgent = 'all';
-    function renderAgents(outputs) {
-      const tabs = document.querySelector('#agent-tabs');
-      const content = document.querySelector('#agents');
-      if (!outputs.length) {
-        tabs.innerHTML = '';
-        content.className = 'empty-state';
-        content.innerHTML = '<div><span class="empty-icon">✧</span>Agents are listening…</div>';
+    const activePanels = { left: 'session-guide', right: 'transcript' };
+    const labelFor = id => id === 'transcript' ? 'Transcript' : id.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+    const transcriptMarkup = segments => segments.length ? segments.map(s =>
+      `<div class="segment"><span class="time">${time(s.start_ms)}</span><span class="speaker">${esc(s.speaker_id || 'unknown speaker')}</span><div class="segment-text">${esc(s.text)}</div></div>`).join('') : '<div class="empty-state"><div><span class="empty-icon">◌</span>Waiting for the first spoken scene…</div></div>';
+    function renderPanel(slot, transcript, outputs) {
+      const tabs = document.querySelector(`#${slot}-tabs`);
+      const content = document.querySelector(`#${slot}-content`);
+      const title = document.querySelector(`#${slot}-title`);
+      const items = [{ id: 'transcript', label: 'Transcript' }, ...outputs.map(a => ({ id: a.agent_id, label: labelFor(a.agent_id) }))];
+      const available = new Set(items.map(item => item.id));
+      if (!available.has(activePanels[slot])) activePanels[slot] = slot === 'left' && available.has('session-guide') ? 'session-guide' : items[0].id;
+      tabs.innerHTML = items.map(item => `<button class="pane-tab${item.id === activePanels[slot] ? ' active' : ''}" data-panel="${esc(item.id)}">${esc(item.label)}</button>`).join('');
+      tabs.querySelectorAll('.pane-tab').forEach(tab => tab.addEventListener('click', () => {
+        activePanels[slot] = tab.dataset.panel;
+        renderPanel(slot, transcript, outputs);
+      }));
+      const selected = activePanels[slot];
+      title.textContent = labelFor(selected);
+      if (selected === 'transcript') {
+        content.className = 'pane-content';
+        content.innerHTML = transcriptMarkup(transcript);
         return;
       }
-      if (activeAgent !== 'all' && !outputs.some(a => a.agent_id === activeAgent)) activeAgent = 'all';
-      const tabItems = [{ id: 'all', label: 'All agents' }, ...outputs.map(a => ({ id: a.agent_id, label: a.agent_id }))];
-      tabs.innerHTML = tabItems.map(tab =>
-        `<button class="agent-tab${tab.id === activeAgent ? ' active' : ''}" data-agent="${esc(tab.id)}">${esc(tab.label)}</button>`).join('');
-      tabs.querySelectorAll('.agent-tab').forEach(tab => tab.addEventListener('click', () => {
-        activeAgent = tab.dataset.agent;
-        renderAgents(outputs);
-      }));
-      const visible = activeAgent === 'all' ? outputs : outputs.filter(a => a.agent_id === activeAgent);
-      content.className = '';
-      content.innerHTML = visible.map(a =>
-        `<div class="agent"><h3>${esc(a.title)} <small>(${esc(a.agent_id)})</small></h3>${esc(a.body)}</div>`).join('');
+      const agent = outputs.find(output => output.agent_id === selected);
+      content.className = agent ? 'pane-content' : 'pane-content empty-state';
+      content.innerHTML = agent ? `<div class="agent"><h3>${esc(agent.title)} <small>(${esc(agent.agent_id)})</small></h3>${esc(agent.body)}</div>` : '<div><span class="empty-icon">✧</span>Agents are listening…</div>';
     }
     async function refresh() {
       try {
@@ -278,10 +281,9 @@ const INDEX_HTML: &str = r##"<!doctype html>
         document.querySelector('#segment-count').textContent = state.transcript.length;
         const latest = state.transcript[state.transcript.length - 1]; document.querySelector('#latest-speaker').textContent = latest ? (latest.speaker_id || 'unknown speaker') : '—';
         document.querySelector('#agent-count').textContent = state.agent_outputs.length;
-        document.querySelector('#transcript').innerHTML = state.transcript.length ? state.transcript.map(s =>
-          `<div class="segment"><span class="time">${time(s.start_ms)}</span><span class="speaker">${esc(s.speaker_id || 'unknown speaker')}</span><div class="segment-text">${esc(s.text)}</div></div>`).join('') : '<div class="empty-state"><div><span class="empty-icon">◌</span>Waiting for the first spoken scene…</div></div>';
-        renderAgents(state.agent_outputs);
-        const transcript = document.querySelector('#transcript'); transcript.scrollTop = transcript.scrollHeight;
+        renderPanel('left', state.transcript, state.agent_outputs);
+        renderPanel('right', state.transcript, state.agent_outputs);
+        document.querySelectorAll('.pane-content').forEach(panel => panel.scrollTop = panel.scrollHeight);
       } catch (_) { document.querySelector('#status').textContent = 'UI disconnected'; }
     }
     refresh(); setInterval(refresh, 1000);
