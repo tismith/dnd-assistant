@@ -766,6 +766,29 @@ fn default_app_config() -> AppConfig {
                 include_campaign_context: false,
                 run_every_segments: 6,
             },
+            AgentConfig {
+                id: "session-guide".into(),
+                kind: AgentKind::Llm,
+                enabled: true,
+                output: "session-guide.md".into(),
+                instruction: None,
+                prompt_file: Some("prompts/session-guide.md".into()),
+                workspace_paths: vec![
+                    "sessions".into(),
+                    "campaign/CAMPAIGN_CONTEXT.md".into(),
+                    "campaign/CANON.md".into(),
+                    "plot/OPEN_THREADS.md".into(),
+                    "characters/NPCS.md".into(),
+                    "world/LOCATIONS.md".into(),
+                    "world/FACTIONS.md".into(),
+                ],
+                workspace_query: Some(
+                    "prep plan next session scene encounter NPC location open threads".into(),
+                ),
+                write_paths: vec![],
+                include_campaign_context: false,
+                run_every_segments: 6,
+            },
         ],
         campaign_context: vec![],
         model_sha256: None,
@@ -1159,7 +1182,7 @@ mod tests {
         let config = default_app_config();
         assert_eq!(DEFAULT_MODEL_FILENAME, "ggml-base.en.bin");
         assert_eq!(config.llm.as_ref().unwrap().endpoint, "codex://local");
-        assert_eq!(config.agents.len(), 4);
+        assert_eq!(config.agents.len(), 5);
         assert!(
             config.agents[..3]
                 .iter()
@@ -1169,6 +1192,7 @@ mod tests {
             config.agents[3].workspace_paths[0],
             "campaign/CAMPAIGN_CONTEXT.md"
         );
+        assert_eq!(config.agents[4].id, "session-guide");
         assert!(
             config
                 .agents

@@ -119,9 +119,12 @@ For a custom model agent, add an entry like:
 }
 ```
 
-The repository includes focused prompts for `gm-copilot`, `continuity-watcher`,
-`player-interest`, `session-scribe`, and `session-supervisor`. The first four
-are live read-only observers; the supervisor runs only through `session-end`.
+The repository includes focused prompts for `gm-copilot`, `session-guide`,
+`continuity-watcher`, `player-interest`, `session-scribe`, and
+`session-supervisor`. The first five are live read-only observers; the
+supervisor runs only through `session-end`. `session-guide` specifically
+cross-checks the upcoming session prep against the live scene and campaign
+context, while treating prep as intention rather than established fact.
 They are disabled in `agents.example.json` by default because model agents
 require an explicitly configured LLM provider. Enable only the agents you want
 and keep their `workspace_paths` scoped to the campaign material they need.
