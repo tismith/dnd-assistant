@@ -125,6 +125,19 @@ fn context_for_agent(context: &TranscriptContext, agent: &AgentConfig) -> Transc
         query.to_owned()
     };
     scoped.workspace_context = workspace.search(&query, 24);
+    if agent.kind == AgentKind::Llm {
+        let sources = scoped
+            .workspace_context
+            .iter()
+            .map(|document| document.path.as_str())
+            .collect::<Vec<_>>();
+        eprintln!(
+            "agent {} workspace context: {} document(s): {}",
+            agent.id,
+            sources.len(),
+            sources.join(", ")
+        );
+    }
     scoped
 }
 

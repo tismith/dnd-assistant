@@ -748,9 +748,19 @@ fn default_app_config() -> AppConfig {
                 output: "gm-copilot.md".into(),
                 instruction: None,
                 prompt_file: Some("prompts/gm-copilot.md".into()),
-                workspace_paths: vec![],
+                workspace_paths: vec![
+                    "campaign/CAMPAIGN_CONTEXT.md".into(),
+                    "campaign/CANON.md".into(),
+                    "plot/OPEN_THREADS.md".into(),
+                    "characters/NPCS.md".into(),
+                    "characters/PCS.md".into(),
+                    "world/LOCATIONS.md".into(),
+                    "world/FACTIONS.md".into(),
+                    "sessions".into(),
+                ],
                 workspace_query: Some(
-                    "campaign canon open threads NPC lore locations quests factions".into(),
+                    "campaign canon open threads NPC PCs party lore locations quests factions"
+                        .into(),
                 ),
                 write_paths: vec![],
                 include_campaign_context: false,
@@ -1151,10 +1161,13 @@ mod tests {
         assert_eq!(config.llm.as_ref().unwrap().endpoint, "codex://local");
         assert_eq!(config.agents.len(), 4);
         assert!(
-            config
-                .agents
+            config.agents[..3]
                 .iter()
                 .all(|agent| agent.workspace_paths.is_empty())
+        );
+        assert_eq!(
+            config.agents[3].workspace_paths[0],
+            "campaign/CAMPAIGN_CONTEXT.md"
         );
         assert!(
             config
