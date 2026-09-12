@@ -126,10 +126,13 @@ fn live(model_path: Option<String>, config_path: Option<String>, output_dir: Opt
     let output_dir = resolve_output_dir(output_dir, &config);
     set_default_session_id(&mut config, &output_dir);
     let model_path = resolve_model_path(model_path, &config);
-    let transcriber = WhisperTranscriber::load(&model_path).unwrap_or_else(|error| {
-        eprintln!("transcription unavailable: {error}");
-        std::process::exit(1);
-    });
+    let transcription_glossary = load_transcription_glossary();
+    let transcriber =
+        WhisperTranscriber::load_with_prompt(&model_path, transcription_glossary.as_deref())
+            .unwrap_or_else(|error| {
+                eprintln!("transcription unavailable: {error}");
+                std::process::exit(1);
+            });
     let capture = start_default_input(128).unwrap_or_else(|error| {
         eprintln!("audio unavailable: {error}");
         std::process::exit(1);
@@ -458,8 +461,10 @@ fn transcribe_wav(
     } else {
         PathBuf::from(model_path)
     };
-    let mut transcriber = WhisperTranscriber::load(&model_path)
-        .unwrap_or_else(|error| panic!("transcription unavailable: {error}"));
+    let transcription_glossary = load_transcription_glossary();
+    let mut transcriber =
+        WhisperTranscriber::load_with_prompt(&model_path, transcription_glossary.as_deref())
+            .unwrap_or_else(|error| panic!("transcription unavailable: {error}"));
     let (sample_rate, channels, samples) = read_pcm16_wav(Path::new(&wav_path))
         .unwrap_or_else(|error| panic!("cannot parse {wav_path}: {error}"));
     let audio = downmix_and_resample(&samples, channels as usize, sample_rate, 16_000);
@@ -626,6 +631,33 @@ fn load_campaign_context(config: &AppConfig) -> Vec<String> {
                 .unwrap_or_else(|error| panic!("cannot read campaign context {path}: {error}"))
         })
         .collect()
+}
+
+fn load_transcription_glossary() -> Option<String> {
+    let path = env::current_dir()
+        .unwrap_or_else(|error| panic!("cannot determine workspace directory: {error}"))
+        .join("campaign/TRANSCRIPTION_GLOSSARY.md");
+    match fs::read_to_string(&path) {
+        Ok(content) if !content.trim().is_empty() => {
+            println!("Using transcription glossary: {}", path.display());
+            Some(content)
+        }
+        Ok(_) => {
+            eprintln!(
+                "transcription glossary is empty; ignoring: {}",
+                path.display()
+            );
+            None
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            eprintln!(
+                "cannot read transcription glossary {}; ignoring: {error}",
+                path.display()
+            );
+            None
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

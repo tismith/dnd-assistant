@@ -49,6 +49,11 @@ the XDG cache directory (`$XDG_CACHE_HOME/dnd-assistant/models`, or
 outputs default to a per-session directory beneath
 `$XDG_DATA_HOME/dnd-assistant/sessions`, or
 `~/.local/share/dnd-assistant/sessions`.
+If the current campaign workspace contains
+`campaign/TRANSCRIPTION_GLOSSARY.md`, its text is supplied to Whisper as an
+initial vocabulary prompt for every audio window. Use it for proper nouns,
+locations, factions, creatures, and other setting-specific spellings. The
+file is optional, read-only, and bounded before being passed to the model.
 Each enabled agent receives the current segment and a rolling 20-segment
 window, plus the configured campaign Markdown contents. Custom model agents
 can set an inline `instruction`, a longer `prompt_file`, and explicit
