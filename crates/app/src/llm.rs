@@ -200,6 +200,15 @@ fn read_prompt_file(path: &str) -> Result<String, String> {
         "prompts/session-supervisor.md" => {
             Ok(include_str!("../../../prompts/session-supervisor.md").into())
         }
+        "prompts/continuity-watcher.md" => {
+            Ok(include_str!("../../../prompts/continuity-watcher.md").into())
+        }
+        "prompts/player-interest.md" => {
+            Ok(include_str!("../../../prompts/player-interest.md").into())
+        }
+        "prompts/session-scribe.md" => {
+            Ok(include_str!("../../../prompts/session-scribe.md").into())
+        }
         _ => Err(format!("cannot read agent prompt file: {path}")),
     }
 }
