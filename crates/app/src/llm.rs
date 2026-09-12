@@ -50,6 +50,13 @@ pub fn run(
     config: &AgentConfig,
     context: &TranscriptContext,
 ) -> Result<AgentOutput, String> {
+    if let Some(variable) = provider.api_key_env.as_deref()
+        && std::env::var(variable).is_err()
+    {
+        return Err(format!(
+            "model API key environment variable {variable} is unset"
+        ));
+    }
     let request = AgentRequest {
         agent_id: config.id.clone(),
         instruction: config.instruction.clone(),
@@ -129,10 +136,7 @@ pub fn run_session_editor(
 ) -> Result<CampaignUpdatePlan, String> {
     let system = load_prompt(config)?;
     let context = serde_json::to_string(context).map_err(|error| error.to_string())?;
-    let user = format!(
-        "Review this complete session and campaign workspace. Return only valid JSON matching this schema: {{\"summary\": string, \"updates\": [{{\"path\": string, \"reason\": string, \"evidence\": [string], \"find\": string|null, \"replace\": string}}]}}.\nDo not invent facts. Use exact existing text in find for edits.\n{context}"
-    );
-    let content = complete(provider, &system, &user)?;
+    let content = complete(provider, &system, &context)?;
     parse_session_update_plan(&content)
 }
 
@@ -362,35 +366,51 @@ fn load_prompt(config: &AgentConfig) -> Result<String, String> {
         .collect::<Vec<_>>()
         .join("\n\n");
     if prompt.is_empty() {
-        Ok(
-            "You are a concise tabletop RPG assistant. Return only useful observations or options."
-                .into(),
-        )
+        Err(format!(
+            "agent {} has no prompt_file or instruction",
+            config.id
+        ))
     } else {
         Ok(prompt)
     }
 }
 
 fn read_prompt_file(path: &str) -> Result<String, String> {
-    if let Ok(content) = std::fs::read_to_string(path) {
-        return Ok(content);
+    let configured = std::path::Path::new(path);
+    let mut candidates = Vec::new();
+    if configured.is_absolute() {
+        candidates.push(configured.to_owned());
+    } else {
+        candidates.push(
+            std::env::current_dir()
+                .map_err(|error| error.to_string())?
+                .join(path),
+        );
+        let config_base = std::env::var_os("XDG_CONFIG_HOME")
+            .map(std::path::PathBuf::from)
+            .filter(|path| path.is_absolute())
+            .or_else(|| {
+                std::env::var_os("HOME")
+                    .map(std::path::PathBuf::from)
+                    .map(|path| path.join(".config"))
+            });
+        if let Some(config_base) = config_base {
+            candidates.push(config_base.join("dnd-assistant").join(path));
+        }
+        if let Ok(executable) = std::env::current_exe()
+            && let Some(parent) = executable.parent()
+        {
+            candidates.push(parent.join(path));
+            candidates.push(parent.join("../../").join(path));
+            candidates.push(parent.join("../../../").join(path));
+        }
     }
-    match path {
-        "prompts/gm-copilot.md" => Ok(include_str!("../../../prompts/gm-copilot.md").into()),
-        "prompts/session-supervisor.md" => {
-            Ok(include_str!("../../../prompts/session-supervisor.md").into())
+    for candidate in candidates {
+        if let Ok(content) = std::fs::read_to_string(&candidate) {
+            return Ok(content);
         }
-        "prompts/continuity-watcher.md" => {
-            Ok(include_str!("../../../prompts/continuity-watcher.md").into())
-        }
-        "prompts/player-interest.md" => {
-            Ok(include_str!("../../../prompts/player-interest.md").into())
-        }
-        "prompts/session-scribe.md" => {
-            Ok(include_str!("../../../prompts/session-scribe.md").into())
-        }
-        _ => Err(format!("cannot read agent prompt file: {path}")),
     }
+    Err(format!("cannot read agent prompt file: {path}"))
 }
 
 #[cfg(test)]
