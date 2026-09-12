@@ -38,7 +38,11 @@ impl WhisperTranscriber {
         &mut self,
         audio: &[f32],
     ) -> Result<Vec<TranscriptSegment>, TranscriptionError> {
-        let params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+        // Room microphones often produce Whisper's textual blank-audio marker
+        // on quiet/noisy windows. Non-speech suppression keeps that marker and
+        // similar noise tokens out of the application transcript.
+        params.set_suppress_nst(true);
         let mut state = self
             .context
             .create_state()
@@ -52,7 +56,7 @@ impl WhisperTranscriber {
             let start_ms = segment.start_timestamp() as u64 * 10;
             let end_ms = segment.end_timestamp() as u64 * 10;
             let text = segment.to_string().trim().to_owned();
-            if text.is_empty() || end_ms <= start_ms {
+            if text.is_empty() || is_blank_audio_marker(&text) || end_ms <= start_ms {
                 continue;
             }
             self.next_segment_number += 1;
@@ -67,5 +71,24 @@ impl WhisperTranscriber {
             });
         }
         Ok(segments)
+    }
+}
+
+fn is_blank_audio_marker(text: &str) -> bool {
+    matches!(
+        text.trim().to_ascii_uppercase().as_str(),
+        "[BLANK_AUDIO]" | "[BLANK AUDIO]" | "BLANK_AUDIO" | "BLANK AUDIO"
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_blank_audio_marker;
+
+    #[test]
+    fn recognizes_whisper_blank_audio_markers() {
+        assert!(is_blank_audio_marker("[BLANK_AUDIO]"));
+        assert!(is_blank_audio_marker(" [blank audio] "));
+        assert!(!is_blank_audio_marker("The room is quiet."));
     }
 }
