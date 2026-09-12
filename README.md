@@ -93,11 +93,14 @@ normalized RMS threshold with `DND_ASSISTANT_SILENCE_RMS` if the microphone
 needs a different noise floor (the default is `0.005`).
 
 An optional `llm` provider can be configured in the same JSON file for agents
-with `"kind": "llm"`. The endpoint uses the OpenAI-compatible
-`/chat/completions` request shape. Set `api_key_env` when the endpoint needs a
-Bearer token; leave it out for a local endpoint. Network model agents are
-disabled unless explicitly enabled, and their failures do not stop capture or
-the other agents.
+with `"kind": "llm"`. Set the endpoint to `codex://local` to use the locally
+installed Codex app-server and your existing Codex login. The assistant starts
+an ephemeral read-only Codex thread for each agent run and passes only the
+bounded context assembled by its workspace index. No campaign files are made
+available to Codex outside that context. An OpenAI-compatible
+`/chat/completions` endpoint is also supported; set `api_key_env` when it needs
+a Bearer token. Network/model agents are disabled unless explicitly enabled,
+and their failures do not stop capture or the other agents.
 
 For a custom model agent, add an entry like:
 

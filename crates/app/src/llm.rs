@@ -2,7 +2,13 @@ use dnd_assistant_core::{
     AgentConfig, AgentKind, AgentOutput, AgentRequest, CampaignUpdatePlan, TranscriptContext,
 };
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
+use std::{
+    io::{BufRead, BufReader, Write},
+    process::{Command, Stdio},
+    sync::mpsc,
+    thread,
+    time::{Duration, Instant},
+};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct LlmConfig {
@@ -51,6 +57,21 @@ pub fn run(
     };
     let system = load_prompt(config)?;
     let user = serde_json::to_string(&request.context).map_err(|error| error.to_string())?;
+    if provider.endpoint == "codex://local" {
+        let content = run_codex(
+            &provider.model,
+            &system,
+            &format!(
+                "Reason over this live session context. Workspace documents are read-only. Return only the useful agent output; do not edit files.\n{user}"
+            ),
+        )?;
+        return Ok(AgentOutput {
+            agent_id: config.id.clone(),
+            kind: AgentKind::Llm,
+            title: "Codex agent".into(),
+            body: content,
+        });
+    }
     let body = ChatRequest {
         model: &provider.model,
         messages: [
@@ -126,6 +147,9 @@ fn parse_session_update_plan(content: &str) -> Result<CampaignUpdatePlan, String
 }
 
 fn complete(provider: &LlmConfig, system: &str, user: &str) -> Result<String, String> {
+    if provider.endpoint == "codex://local" {
+        return run_codex(&provider.model, system, user);
+    }
     let body = ChatRequest {
         model: &provider.model,
         messages: [
@@ -166,6 +190,162 @@ fn complete(provider: &LlmConfig, system: &str, user: &str) -> Result<String, St
         .map(|choice| choice.message.content)
         .filter(|content| !content.trim().is_empty())
         .ok_or_else(|| "model response contained no choices".to_owned())
+}
+
+fn run_codex(model: &str, system: &str, user: &str) -> Result<String, String> {
+    let root = std::env::temp_dir().join(format!(
+        "dnd-assistant-codex-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|error| error.to_string())?
+            .as_nanos()
+    ));
+    std::fs::create_dir(&root).map_err(|error| format!("cannot create Codex sandbox: {error}"))?;
+    let mut child = Command::new("codex")
+        .args(["app-server", "--stdio"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("cannot start local Codex app-server: {error}"))?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "local Codex app-server stdin was unavailable".to_owned())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "local Codex app-server stdout was unavailable".to_owned())?;
+    let (lines_sender, lines_receiver) = mpsc::channel();
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if lines_sender.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    let mut request_id = 0_u64;
+    request_id += 1;
+    send_rpc(
+        &mut stdin,
+        request_id,
+        "initialize",
+        serde_json::json!({
+            "clientInfo": {"name": "dnd-assistant", "title": "D&D Assistant", "version": "0.1.0"},
+            "capabilities": {"experimentalApi": true}
+        }),
+    )?;
+    wait_for_response(&lines_receiver, request_id)?;
+    send_notification(&mut stdin, "initialized", serde_json::json!({}))?;
+
+    request_id += 1;
+    let mut thread_params = serde_json::json!({
+        "cwd": root,
+        "approvalPolicy": "never",
+        "sandbox": "read-only",
+        "ephemeral": true,
+        "developerInstructions": system
+    });
+    if !model.is_empty() && model != "default" {
+        thread_params["model"] = serde_json::Value::String(model.to_owned());
+    }
+    send_rpc(&mut stdin, request_id, "thread/start", thread_params)?;
+    let thread_response = wait_for_response(&lines_receiver, request_id)?;
+    let thread_id = thread_response["result"]["thread"]["id"]
+        .as_str()
+        .ok_or_else(|| "local Codex app-server returned no thread id".to_owned())?
+        .to_owned();
+
+    request_id += 1;
+    send_rpc(
+        &mut stdin,
+        request_id,
+        "turn/start",
+        serde_json::json!({
+            "threadId": thread_id,
+            "input": [{"type": "text", "text": user}],
+            "approvalPolicy": "never",
+            "sandboxPolicy": {"type": "readOnly", "networkAccess": false}
+        }),
+    )?;
+    wait_for_response(&lines_receiver, request_id)?;
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut content = String::new();
+    while Instant::now() < deadline {
+        let line = lines_receiver
+            .recv_timeout(Duration::from_millis(250))
+            .map_err(|error| format!("local Codex app-server stopped: {error}"))?;
+        let message: serde_json::Value = serde_json::from_str(&line)
+            .map_err(|error| format!("invalid local Codex app-server message: {error}"))?;
+        match message["method"].as_str() {
+            Some("item/agentMessage/delta") => {
+                content.push_str(message["params"]["delta"].as_str().unwrap_or_default());
+            }
+            Some("item/completed") => {
+                if message["params"]["item"]["type"] == "agentMessage" {
+                    if content.is_empty() {
+                        content = message["params"]["item"]["text"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_owned();
+                    }
+                    // The completed agent-message item is sufficient for this
+                    // one-shot request; do not wait for unrelated server
+                    // notifications such as MCP startup updates.
+                    break;
+                }
+            }
+            Some("turn/completed") => break,
+            Some("error") => return Err(format!("local Codex app-server error: {line}")),
+            _ => {}
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = std::fs::remove_dir(&root);
+    if content.trim().is_empty() {
+        Err("local Codex app-server returned no output".into())
+    } else {
+        Ok(content.trim().to_owned())
+    }
+}
+
+fn send_rpc(
+    stdin: &mut impl Write,
+    id: u64,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<(), String> {
+    let message =
+        serde_json::json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
+    writeln!(stdin, "{message}").map_err(|error| format!("cannot write Codex RPC request: {error}"))
+}
+
+fn send_notification(
+    stdin: &mut impl Write,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<(), String> {
+    let message = serde_json::json!({"jsonrpc": "2.0", "method": method, "params": params});
+    writeln!(stdin, "{message}")
+        .map_err(|error| format!("cannot write Codex RPC notification: {error}"))
+}
+
+fn wait_for_response(lines: &mpsc::Receiver<String>, id: u64) -> Result<serde_json::Value, String> {
+    loop {
+        let line = lines
+            .recv_timeout(Duration::from_secs(30))
+            .map_err(|error| format!("timed out waiting for Codex RPC response: {error}"))?;
+        let message: serde_json::Value = serde_json::from_str(&line)
+            .map_err(|error| format!("invalid Codex RPC message: {error}"))?;
+        if message["id"].as_u64() == Some(id) {
+            if message.get("error").is_some() {
+                return Err(format!("Codex RPC error: {message}"));
+            }
+            return Ok(message);
+        }
+    }
 }
 
 fn load_prompt(config: &AgentConfig) -> Result<String, String> {

@@ -1,8 +1,8 @@
 {
   "campaign_context": [],
   "llm": {
-    "endpoint": "http://127.0.0.1:8000/v1/chat/completions",
-    "model": "local-model"
+    "endpoint": "codex://local",
+    "model": "default"
   },
   "agents": [
     { "id": "recorder", "kind": "recorder", "enabled": true, "output": "transcript.jsonl", "run_every_segments": 1 },
