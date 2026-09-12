@@ -24,14 +24,8 @@ pub struct AudioChunk {
 pub enum CaptureError {
     #[error("no default input device is available")]
     NoInputDevice,
-    #[error("could not query the device name: {0}")]
-    DeviceName(#[from] cpal::DeviceNameError),
-    #[error("could not query the default input config: {0}")]
-    DefaultConfig(#[from] cpal::DefaultStreamConfigError),
-    #[error("could not build the input stream: {0}")]
-    BuildStream(#[from] cpal::BuildStreamError),
-    #[error("could not start the input stream: {0}")]
-    PlayStream(#[from] cpal::PlayStreamError),
+    #[error("audio operation failed: {0}")]
+    Audio(#[from] cpal::Error),
 }
 
 /// Owns the platform audio stream and receives normalized interleaved f32
@@ -49,7 +43,7 @@ pub fn start_default_input(queue_capacity: usize) -> Result<AudioCapture, Captur
         .ok_or(CaptureError::NoInputDevice)?;
     let config = device.default_input_config()?;
     let format = AudioFormat {
-        sample_rate: config.sample_rate().0,
+        sample_rate: config.sample_rate(),
         channels: config.channels(),
     };
     let (sender, receiver) = mpsc::sync_channel(queue_capacity);
@@ -66,9 +60,9 @@ pub fn start_default_input(queue_capacity: usize) -> Result<AudioCapture, Captur
             build_stream::<u16>(&device, &stream_config, format, sender, error_callback)?
         }
         _ => {
-            return Err(CaptureError::BuildStream(
-                cpal::BuildStreamError::StreamConfigNotSupported,
-            ));
+            return Err(CaptureError::Audio(cpal::Error::from(
+                cpal::ErrorKind::UnsupportedConfig,
+            )));
         }
     };
     stream.play()?;
@@ -84,14 +78,14 @@ fn build_stream<T>(
     config: &cpal::StreamConfig,
     format: AudioFormat,
     sender: SyncSender<AudioChunk>,
-    error_callback: impl FnMut(cpal::StreamError) + Send + 'static,
-) -> Result<cpal::Stream, cpal::BuildStreamError>
+    error_callback: impl FnMut(cpal::Error) + Send + 'static,
+) -> Result<cpal::Stream, cpal::Error>
 where
     T: cpal::SizedSample,
     f32: cpal::FromSample<T>,
 {
     device.build_input_stream(
-        config,
+        *config,
         move |data: &[T], _| {
             let samples = data
                 .iter()
@@ -110,12 +104,12 @@ pub fn default_input_description() -> Result<(String, AudioFormat), CaptureError
     let device = host
         .default_input_device()
         .ok_or(CaptureError::NoInputDevice)?;
-    let name = device.name()?;
+    let name = device.description()?.name().to_owned();
     let config = device.default_input_config()?;
     Ok((
         name,
         AudioFormat {
-            sample_rate: config.sample_rate().0,
+            sample_rate: config.sample_rate(),
             channels: config.channels(),
         },
     ))
