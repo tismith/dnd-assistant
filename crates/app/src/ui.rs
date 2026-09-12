@@ -200,6 +200,10 @@ const INDEX_HTML: &str = r##"<!doctype html>
     .segment { border-bottom: 1px solid #332e3e; padding: .55rem 0; }
     .time, .speaker, .status { color: #b9a8d9; font-size: .8rem; }
     .agent { border-top: 1px solid #3b3548; margin-top: 1rem; padding-top: 1rem; white-space: pre-wrap; }
+    .agent-tabs { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: .8rem; }
+    .agent-tab { padding: .35rem .6rem; font-size: .85rem; }
+    .agent-tab.active { background: #8d6fc1; border-color: #b9a8d9; color: #17151d; }
+    .agent-empty { color: #b9a8d9; }
     @media (max-width: 800px) { main { grid-template-columns: 1fr; } }
   </style>
 </head>
@@ -207,11 +211,34 @@ const INDEX_HTML: &str = r##"<!doctype html>
   <header><h1>LIVE SESSION</h1><span id="status" class="status">starting</span></header>
   <nav class="controls"><button id="start" onclick="action('start')">Start session</button><button id="pause" onclick="action('pause')">Pause</button><button id="stop" onclick="action('stop')">Stop session</button></nav>
   <main><section><h2>Transcript</h2><div id="transcript">Waiting for transcript…</div></section>
-    <section><h2>Agents</h2><div id="agents">Waiting for agent output…</div></section></main>
+    <section><h2>Agents</h2><div id="agent-tabs" class="agent-tabs"></div><div id="agents" class="agent-empty">Waiting for agent output…</div></section></main>
   <script>
     const esc = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     const time = ms => `${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}`;
     async function action(name) { await fetch(`/api/session/${name}`, { method: 'POST' }); await refresh(); }
+    let activeAgent = 'all';
+    function renderAgents(outputs) {
+      const tabs = document.querySelector('#agent-tabs');
+      const content = document.querySelector('#agents');
+      if (!outputs.length) {
+        tabs.innerHTML = '';
+        content.className = 'agent-empty';
+        content.textContent = 'Waiting for agent output…';
+        return;
+      }
+      if (activeAgent !== 'all' && !outputs.some(a => a.agent_id === activeAgent)) activeAgent = 'all';
+      const tabItems = [{ id: 'all', label: 'All agents' }, ...outputs.map(a => ({ id: a.agent_id, label: a.agent_id }))];
+      tabs.innerHTML = tabItems.map(tab =>
+        `<button class="agent-tab${tab.id === activeAgent ? ' active' : ''}" data-agent="${esc(tab.id)}">${esc(tab.label)}</button>`).join('');
+      tabs.querySelectorAll('.agent-tab').forEach(tab => tab.addEventListener('click', () => {
+        activeAgent = tab.dataset.agent;
+        renderAgents(outputs);
+      }));
+      const visible = activeAgent === 'all' ? outputs : outputs.filter(a => a.agent_id === activeAgent);
+      content.className = '';
+      content.innerHTML = visible.map(a =>
+        `<div class="agent"><h3>${esc(a.title)} <small>(${esc(a.agent_id)})</small></h3>${esc(a.body)}</div>`).join('');
+    }
     async function refresh() {
       try {
         const state = await (await fetch('/api/state')).json();
@@ -222,8 +249,7 @@ const INDEX_HTML: &str = r##"<!doctype html>
         document.querySelector('#stop').disabled = !state.session_active;
         document.querySelector('#transcript').innerHTML = state.transcript.length ? state.transcript.map(s =>
           `<div class="segment"><span class="time">${time(s.start_ms)}</span> <span class="speaker">${esc(s.speaker_id || 'unknown speaker')}</span><br>${esc(s.text)}</div>`).join('') : 'Waiting for transcript…';
-        document.querySelector('#agents').innerHTML = state.agent_outputs.length ? state.agent_outputs.map(a =>
-          `<div class="agent"><h3>${esc(a.title)} <small>(${esc(a.agent_id)})</small></h3>${esc(a.body)}</div>`).join('') : 'Waiting for agent output…';
+        renderAgents(state.agent_outputs);
         const transcript = document.querySelector('#transcript'); transcript.scrollTop = transcript.scrollHeight;
       } catch (_) { document.querySelector('#status').textContent = 'UI disconnected'; }
     }
