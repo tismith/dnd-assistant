@@ -112,6 +112,16 @@ fn capture() {
 
 fn live(model_path: Option<String>, config_path: Option<String>, output_dir: Option<String>) {
     let mut config = load_app_config(config_path.as_deref());
+    println!(
+        "Enabled agents: {}",
+        config
+            .agents
+            .iter()
+            .filter(|agent| agent.enabled)
+            .map(|agent| agent.id.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
     let campaign_context = load_campaign_context(&config);
     let output_dir = resolve_output_dir(output_dir, &config);
     set_default_session_id(&mut config, &output_dir);

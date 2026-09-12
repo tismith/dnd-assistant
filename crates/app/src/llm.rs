@@ -276,15 +276,24 @@ fn run_codex(model: &str, system: &str, user: &str) -> Result<String, String> {
     wait_for_response(&lines_receiver, request_id)?;
     let deadline = Instant::now() + Duration::from_secs(60);
     let mut content = String::new();
+    let mut last_delta: Option<Instant> = None;
     while Instant::now() < deadline {
-        let line = lines_receiver
-            .recv_timeout(Duration::from_millis(250))
-            .map_err(|error| format!("local Codex app-server stopped: {error}"))?;
+        let line = match lines_receiver.recv_timeout(Duration::from_millis(250)) {
+            Ok(line) => line,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if last_delta.is_some_and(|time| time.elapsed() >= Duration::from_secs(3)) {
+                    break;
+                }
+                continue;
+            }
+            Err(error) => return Err(format!("local Codex app-server stopped: {error}")),
+        };
         let message: serde_json::Value = serde_json::from_str(&line)
             .map_err(|error| format!("invalid local Codex app-server message: {error}"))?;
         match message["method"].as_str() {
             Some("item/agentMessage/delta") => {
                 content.push_str(message["params"]["delta"].as_str().unwrap_or_default());
+                last_delta = Some(Instant::now());
             }
             Some("item/completed") => {
                 if message["params"]["item"]["type"] == "agentMessage" {
